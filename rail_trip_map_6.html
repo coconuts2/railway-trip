@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>12日間 鉄道旅行ルートマップ</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
+#app{display:flex;flex-direction:column;height:100vh;}
+#header{padding:7px 14px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
+#header h1{font-size:13px;font-weight:600;color:#222;}
+#status-bar{font-size:11px;color:#888;margin-left:auto;display:flex;align-items:center;gap:6px;}
+#progress{width:100px;height:5px;background:#eee;border-radius:3px;overflow:hidden;}
+#progress-fill{height:100%;background:#534AB7;width:0%;transition:width 0.3s;}
+#cache-btn{background:#f0f0f0;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:10px;color:#666;}
+#cache-btn:hover{background:#e0e0e0;}
+#main{display:flex;flex:1;min-height:0;}
+#map{flex:1;min-width:0;}
+#panel{width:278px;min-width:278px;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;font-size:12px;position:relative;}
+#ph{padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:2;}
+#ph h2{font-size:12px;font-weight:600;color:#222;}
+#ph p{margin-top:2px;font-size:10px;color:#888;}
+.day-block{border-bottom:1px solid #eee;}
+.day-label{padding:4px 12px;font-size:11px;font-weight:600;color:#555;background:#f8f8f5;display:flex;justify-content:space-between;}
+.seg-row{padding:5px 30px 5px 16px;cursor:pointer;border-top:1px solid #f0f0f0;position:relative;}
+.seg-row:hover{background:#f5f5f0;}
+.seg-row.active{background:#eef4ff;outline:2px solid #4477cc;outline-offset:-2px;}
+.seg-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle;}
+.seg-name{font-weight:600;color:#222;font-size:11px;vertical-align:middle;}
+.seg-time{color:#666;font-size:10px;margin-top:1px;}
+.seg-note{color:#888;font-size:10px;margin-top:1px;line-height:1.4;}
+.warn{color:#c84800;}
+.seg-icon{position:absolute;right:6px;top:6px;font-size:10px;line-height:1;}
+#det{display:none;position:absolute;top:0;right:0;width:278px;height:100%;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;z-index:20;box-shadow:-3px 0 10px rgba(0,0,0,0.08);}
+#det-head{display:flex;align-items:flex-start;gap:6px;padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:3;}
+#det-title{font-size:11px;font-weight:600;color:#222;flex:1;line-height:1.4;}
+#det-close{background:#f0f0f0;border:none;border-radius:5px;padding:2px 7px;cursor:pointer;font-size:11px;color:#555;flex-shrink:0;}
+#det-body{padding:11px;}
+.det-badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:10px;font-weight:600;margin-bottom:7px;}
+.det-route{background:#f8f8f5;border-radius:6px;padding:6px 9px;margin-bottom:7px;}
+.det-route h3{font-size:11px;font-weight:600;color:#333;margin-bottom:2px;}
+.det-route p{font-size:10px;color:#666;line-height:1.5;}
+.box-tip{background:#edf7f2;border-left:3px solid #1a9e75;border-radius:0 5px 5px 0;padding:6px 9px;font-size:11px;line-height:1.6;color:#0a5c3f;margin-bottom:6px;}
+.box-warn{background:#fff8ec;border-left:3px solid #e08800;border-radius:0 5px 5px 0;padding:6px 9px;font-size:11px;line-height:1.6;color:#7a4a00;margin-bottom:6px;}
+.box-info{background:#eef4ff;border-left:3px solid #4477cc;border-radius:0 5px 5px 0;padding:6px 9px;font-size:11px;line-height:1.6;color:#1a3a7a;margin-bottom:6px;}
+#legend{display:flex;flex-wrap:wrap;gap:7px;padding:5px 12px;background:#fff;border-top:1px solid #e0e0e0;font-size:11px;flex-shrink:0;}
+.leg-item{display:flex;align-items:center;gap:4px;color:#555;}
+.leg-line{width:18px;height:3px;border-radius:2px;}
+/* レスポンシブ対応 */
+@media (max-width:768px){
+  #main{flex-direction:column;}
+  #panel{width:100%;min-width:0;border-left:none;border-top:1px solid #e0e0e0;height:40vh;overflow-y:auto;}
+  #map{height:60vh;flex:none;}
+  #det{width:100%;height:40vh;top:auto;bottom:0;}
+  #header h1{font-size:12px;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="header">
+  <h1>🚄 12日間 近畿・中国・四国・九州 鉄道旅行ルートマップ</h1>
+  <div id="status-bar">
+    <span id="status-text">読み込み中...</span>
+    <div id="progress"><div id="progress-fill"></div></div>
+    <span id="progress-label">0/?</span>
+    <button id="cache-btn" onclick="clearCache()" title="キャッシュをクリアして再取得">🗑 キャッシュ削除</button>
+  </div>
+</div>
+<div id="main">
+  <div id="map"></div>
+  <div id="panel">
+    <div id="ph"><h2>全行程</h2><p>クリックで地図ズーム・詳細を表示</p></div>
+    <div id="panel-body"></div>
+  </div>
+  <div id="det">
+    <div id="det-head"><span id="det-title"></span><button id="det-close" onclick="closeDet()">✕ 閉じる</button></div>
+    <div id="det-body"></div>
+  </div>
+</div>
+<div id="legend"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+<script>
+// =====================================================================
+// 定数
+// =====================================================================
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7日間キャッシュ
+const CONCURRENCY = 4; // Overpass同時接続数
+const ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+];
+
+const T = {
+  shinkansen:{label:'新幹線',color:'#534AB7',dash:null,w:5},
+  kanko:{label:'観光列車',color:'#D85A30',dash:'8,5',w:4},
+  tokkyu:{label:'特急・在来線',color:'#185FA5',dash:'4,3',w:3},
+  local:{label:'ローカル線',color:'#854F0B',dash:'6,4',w:3},
+  ferry:{label:'船・フェリー',color:'#0F6E56',dash:'4,4',w:3},
+  bus:{label:'バス・路面電車',color:'#4a9922',dash:'4,3',w:2},
+  taxi:{label:'タクシー',color:'#888780',dash:'3,4',w:2},
+  plane:{label:'飛行機',color:'#3C3489',dash:'2,6',w:4},
+};
+
+const DAY_LABELS = [
+  "1日目 8/7（金）","2日目 8/8（土）","3日目 8/9（日）","4日目 8/11（火）",
+  "5日目 8/12（水）","6日目 8/13（木）","7日目 8/14（金）","8日目 8/15（土）",
+  "9日目 8/16（日）","10日目 8/17（月）","11日目 8/18（火）","12日目 8/19（水）"
+];
+
+// =====================================================================
+// 行程データ
+// fromName/toName: 駅名（OSM検索用）
+// bbox: [S,W,N,E] — 路線が収まる最小bbox
+// railTag: "rail" | "tram" | "light_rail"
+// fallback: フォールバック座標列 [lat,lon][]
+// =====================================================================
+const SEGS = [
+// ── Day 1 ──
+{di:0,si:0,type:"shinkansen",name:"北陸新幹線 かがやき513号",from:"東京",dep:"17:24",to:"富山",arr:"19:35",note:"2時間11分",
+ detail:{tip:"北陸新幹線の最速達列車。E7/W7系使用。"},
+ fromName:"東京",toName:"富山",bbox:[35.6,137.1,36.8,139.9],railTag:"rail",
+ fallback:[[35.681,139.767],[36.012,138.367],[36.594,137.529],[36.702,137.213]]},
+{di:0,si:1,type:"local",name:"富山地鉄環状線（路面電車）",from:"富山駅",dep:"19:40",to:"大手モール",arr:"19:48",note:"8分",
+ detail:{tip:"富山駅新幹線コンコースから直結。ICカード利用可。"},
+ fallback:[[36.7014,137.2131],[36.7022,137.2153]]},
+// ── Day 2 ──
+{di:1,si:0,type:"tokkyu",name:"あいの風とやま鉄道 普通",from:"富山",dep:"09:05",to:"高岡",arr:"09:25",note:"20分",
+ detail:{tip:"旧JR北陸本線を引き継いだ第三セクター。"},
+ fromName:"富山",toName:"高岡",bbox:[36.68,136.95,36.76,137.25],railTag:"rail",
+ fallback:[[36.7014,137.2131],[36.7409,137.0153]]},
+{di:1,si:1,type:"kanko",name:"JR城端線 快速 べるもんた51号",from:"高岡",dep:"09:38",to:"福光",arr:"10:21",note:"⚠全車指定・発売日10:00即完売注意",warn:true,
+ detail:{warn:"発売日（乗車1ヶ月前10:00）はほぼ即完売。「10時打ち」での予約が必須。",tip:"越中の山里を走る観光列車。庄川峡の景色が絶品。",info:"べるもんた＝「美しい山と海」の略。土日祝のみ運行。"},
+ fromName:"高岡",toName:"福光",bbox:[36.55,136.85,36.76,137.06],railTag:"rail",
+ fallback:[[36.7409,137.0153],[36.6832,136.9681],[36.5842,136.870]]},
+{di:1,si:2,type:"bus",name:"加越能バス 南砺・金沢線",from:"福光駅",dep:"10:21",to:"金沢駅西口",arr:"11:15",note:"54分",
+ detail:{tip:"現金準備推奨。金沢駅西口（Rinto側）着。"},
+ fallback:[[36.5842,136.870],[36.5781,136.6482]]},
+{di:1,si:3,type:"tokkyu",name:"IRいしかわ鉄道→JR七尾線",from:"金沢",dep:"11:32",to:"七尾",arr:"12:58",note:"1時間26分",
+ detail:{tip:"能登の里山海道の車窓が楽しめる。"},
+ fromName:"金沢",toName:"七尾",bbox:[36.55,136.60,37.10,137.00],railTag:"rail",
+ fallback:[[36.5781,136.6482],[36.6320,136.7234],[36.8989,136.7763],[37.0416,136.9645]]},
+{di:1,si:4,type:"tokkyu",name:"JR七尾線→のと鉄道直通",from:"七尾",dep:"13:15",to:"穴水",arr:"13:52",note:"のと鉄道区間直通・37分",
+ detail:{tip:"穴水駅隣の道の駅「さくら駅」で能登の地物や牡蠣のお土産購入が可能。",warn:"震災復旧状況により運行変更の可能性あり。事前確認必須。"},
+ fromName:"七尾",toName:"穴水",bbox:[37.00,136.85,37.28,137.05],railTag:"rail",
+ fallback:[[37.0416,136.9645],[37.0179,136.9122],[37.228,136.9046]]},
+{di:1,si:5,type:"tokkyu",name:"のと鉄道七尾線 普通",from:"穴水",dep:"15:12",to:"和倉温泉",arr:"15:41",note:"折り返し・29分",
+ detail:{tip:"和倉温泉は加賀屋をはじめとする高級旅館が並ぶ名湯。"},
+ fromName:"穴水",toName:"和倉温泉",bbox:[37.00,136.85,37.28,137.05],railTag:"rail",
+ fallback:[[37.228,136.9046],[37.0416,136.9645],[37.0747,136.9259]]},
+{di:1,si:6,type:"kanko",name:"JR七尾線 特急 花嫁のれん4号",from:"和倉温泉",dep:"17:09",to:"金沢",arr:"18:27",note:"⚠全車指定・発売日即完売",warn:true,
+ detail:{warn:"発売日10:00即完売。「10時打ち」必須。特急券＋乗車券をセットで購入。",tip:"輪島塗・加賀友禅をテーマにした豪華観光特急。車内販売あり。",info:"1〜4号車の全車指定席。"},
+ fromName:"和倉温泉",toName:"金沢",bbox:[36.55,136.60,37.10,137.00],railTag:"rail",
+ fallback:[[37.0747,136.9259],[37.0416,136.9645],[36.8989,136.7763],[36.6320,136.7234],[36.5781,136.6482]]},
+{di:1,si:7,type:"shinkansen",name:"JR北陸新幹線",from:"金沢",dep:"19:55",to:"福井",arr:"20:21",note:"26分",
+ detail:{tip:"2024年3月延伸開業の新区間。W7系使用。"},
+ fromName:"金沢",toName:"福井",bbox:[36.00,136.10,36.65,136.70],railTag:"rail",
+ fallback:[[36.5781,136.6482],[36.3900,136.3710],[36.0621,136.2235]]},
+{di:1,si:8,type:"bus",name:"福井鉄道福武線 普通",from:"福井駅",dep:"20:33",to:"福井城址大名町",arr:"20:38",note:"5分",
+ detail:{tip:"ICカード利用可。"},
+ fallback:[[36.0621,136.2235],[36.0625,136.2205]]},
+// ── Day 3 ──
+{di:2,si:0,type:"shinkansen",name:"JR北陸新幹線 つるぎ19号",from:"福井",dep:"11:41",to:"敦賀",arr:"12:02",note:"21分",
+ detail:{tip:"各駅停車タイプ「つるぎ」。敦賀でサンダーバードに乗換。"},
+ fromName:"福井",toName:"敦賀",bbox:[35.60,136.00,36.10,136.30],railTag:"rail",
+ fallback:[[36.0621,136.2235],[35.6448,136.0765]]},
+{di:2,si:1,type:"tokkyu",name:"特急 サンダーバード20号",from:"敦賀",dep:"12:14",to:"大阪",arr:"13:36",note:"1時間22分（湖西線経由）",
+ detail:{tip:"指定席の事前予約推奨。琵琶湖西岸の景色が美しい。"},
+ fromName:"敦賀",toName:"大阪",bbox:[34.65,135.40,35.70,136.20],railTag:"rail",
+ fallback:[[35.6448,136.0765],[35.501,135.954],[35.2156,135.9098],[34.9863,135.8194],[34.7025,135.496]]},
+{di:2,si:2,type:"bus",name:"Osaka Metro御堂筋線",from:"梅田",dep:"13:36",to:"淀屋橋",arr:"13:39",note:"⚠乗換0分・実質1本後で",warn:true,
+ detail:{warn:"実質1本遅らせる必要あり。淀屋橋での1.5時間待機があるため致命傷にはならない。"},
+ fallback:[[34.7025,135.496],[34.6934,135.5013]]},
+{di:2,si:3,type:"tokkyu",name:"京阪本線特急",from:"淀屋橋",dep:"15:12",to:"出町柳",arr:"16:06",note:"1.5時間休憩後・54分",
+ detail:{tip:"プレミアムカー（有料）で快適移動も可。"},
+ fromName:"淀屋橋",toName:"出町柳",bbox:[34.65,135.50,35.08,135.80],railTag:"rail",
+ fallback:[[34.6934,135.5013],[34.744,135.576],[34.984,135.755],[35.0274,135.7726]]},
+{di:2,si:4,type:"local",name:"叡山電鉄叡山本線",from:"出町柳",dep:"16:07",to:"八瀬比叡山口",arr:"16:21",note:"⚠乗換1分・ダッシュ必須",warn:true,
+ detail:{warn:"地下ホームから地上ホームまで1分半〜2分。1本遅らせることも検討を。"},
+ fromName:"出町柳",toName:"八瀬比叡山口",bbox:[35.02,135.76,35.09,135.82],railTag:"rail",
+ fallback:[[35.0274,135.7726],[35.0768,135.8062]]},
+{di:2,si:5,type:"local",name:"叡山ケーブル",from:"ケーブル八瀬",dep:"16:30",to:"ケーブル比叡",arr:"16:39",note:"9分",
+ detail:{tip:"高低差561m・傾斜25度の急勾配。"},
+ fallback:[[35.078,135.8098],[35.081,135.843]]},
+{di:2,si:6,type:"local",name:"叡山ロープウェイ",from:"ロープ比叡",dep:"16:45",to:"比叡山頂",arr:"16:48",note:"3分",
+ detail:{tip:"山頂から360度の絶景。"},
+ fallback:[[35.081,135.840],[35.0815,135.843]]},
+{di:2,si:7,type:"bus",name:"京阪バス[57]（比叡山内）",from:"比叡山頂",dep:"17:05",to:"無動寺",arr:"17:13",note:"山内バス8分",
+ detail:{tip:"本数少なめ。乗り遅れ厳禁。"},
+ fallback:[[35.0815,135.843],[35.074,135.848]]},
+{di:2,si:8,type:"local",name:"坂本ケーブル",from:"ケーブル延暦寺",dep:"17:30",to:"ケーブル坂本",arr:"17:41",note:"日本一長いケーブルカー・11分",
+ detail:{tip:"全長2,025mの日本最長ケーブルカー。紅葉の名所。"},
+ fallback:[[35.074,135.848],[35.0673,135.858]]},
+{di:2,si:9,type:"bus",name:"江若交通[41]",from:"ケーブル坂本駅",dep:"17:50",to:"坂本比叡山口駅",arr:"17:53",note:"路線バス3分",
+ detail:{warn:"バス到着から京阪電車まで1分しかない。渋滞で遅れるとアウト。"},
+ fallback:[[35.068,135.858],[35.0673,135.860]]},
+{di:2,si:10,type:"local",name:"京阪石山坂本線",from:"坂本比叡山口",dep:"17:54",to:"びわ湖浜大津",arr:"18:10",note:"⚠バスから1分乗換・16分",warn:true,
+ detail:{warn:"バス降車から1分。走って乗り場へ向かう必要あり。"},
+ fromName:"坂本比叡山口",toName:"びわ湖浜大津",bbox:[34.98,135.72,35.08,135.88],railTag:"tram",
+ fallback:[[35.0673,135.860],[35.0096,135.8494]]},
+{di:2,si:11,type:"local",name:"京阪京津線（地下鉄直通）",from:"びわ湖浜大津",dep:"18:17",to:"烏丸御池",arr:"18:44",note:"急勾配・地下直通・27分",
+ detail:{tip:"路面電車が地下鉄に直通する世界でも珍しい路線。最大勾配61‰。"},
+ fromName:"びわ湖浜大津",toName:"烏丸御池",bbox:[34.98,135.72,35.02,135.88],railTag:"tram",
+ fallback:[[35.0096,135.8494],[34.9863,135.8194],[35.0113,135.7681]]},
+{di:2,si:12,type:"bus",name:"京都市営地下鉄烏丸線",from:"烏丸御池",dep:"18:46",to:"京都",arr:"18:52",note:"6分",
+ detail:{tip:"2駅。新幹線乗場まで徒歩5〜8分。"},
+ fallback:[[35.0113,135.7681],[34.9858,135.7588]]},
+{di:2,si:13,type:"shinkansen",name:"JR東海道新幹線 のぞみ50号",from:"京都",dep:"19:21",to:"東京",arr:"21:33",note:"一時帰宅・2時間12分",
+ detail:{tip:"3日間の余韻を楽しみながら帰宅。"},
+ fromName:"京都",toName:"東京",bbox:[34.90,135.70,35.70,139.80],railTag:"rail",
+ fallback:[[34.9858,135.7588],[35.1709,136.8815],[35.388,137.154],[35.6812,139.7671]]},
+// ── Day 4 ──
+{di:3,si:0,type:"shinkansen",name:"JR東海道新幹線 のぞみ271号",from:"東京",dep:"17:00",to:"名古屋",arr:"18:39",note:"1時間39分",
+ detail:{tip:"N700S系使用。夕方出発でゆっくり準備できる。"},
+ fromName:"東京",toName:"名古屋",bbox:[35.10,136.80,35.70,139.80],railTag:"rail",
+ fallback:[[35.6812,139.7671],[35.388,137.154],[35.1709,136.8815]]},
+{di:3,si:1,type:"kanko",name:"近鉄名阪特急 ひのとり",from:"近鉄名古屋",dep:"19:00",to:"大和八木",arr:"20:37",note:"プレミアム車両強く推奨・1h37m",
+ detail:{tip:"プレミアム車両はバックシェル付き電動リクライニングで日本最高峰。全席コンセント付き。",info:"【お得】近鉄特急券は30分以内乗継で「乗継特急券」として1枚に合算でき割安。名古屋から奈良まで通しで購入すること。"},
+ fromName:"近鉄名古屋",toName:"大和八木",bbox:[34.50,135.78,35.18,136.89],railTag:"rail",
+ fallback:[[35.170,136.881],[34.7342,136.5105],[34.5242,135.739],[34.5179,135.7946]]},
+{di:3,si:2,type:"tokkyu",name:"近鉄橿原線特急",from:"大和八木",dep:"20:58",to:"大和西大寺",arr:"21:13",note:"全車指定・15分",
+ detail:{tip:"次の奈良線特急に対面乗換するため座席位置を確認しておくと良い。"},
+ fromName:"大和八木",toName:"大和西大寺",bbox:[34.50,135.77,34.68,135.82],railTag:"rail",
+ fallback:[[34.5179,135.7946],[34.6722,135.7851]]},
+{di:3,si:3,type:"tokkyu",name:"近鉄難波・奈良線特急",from:"大和西大寺",dep:"21:13",to:"近鉄奈良",arr:"21:18",note:"⚠対面0分乗換・5分",warn:true,
+ detail:{tip:"同一ホームの向かい側への対面乗換。ドアを出てすぐ向かいのドアへ。"},
+ fromName:"大和西大寺",toName:"近鉄奈良",bbox:[34.66,135.77,34.69,135.83],railTag:"rail",
+ fallback:[[34.6722,135.7851],[34.6842,135.8275]]},
+// ── Day 5 ──
+{di:4,si:0,type:"tokkyu",name:"近鉄奈良線 特急ひのとり",from:"近鉄奈良",dep:"08:00",to:"大阪難波",arr:"08:41",note:"41分",
+ detail:{tip:"朝の近鉄奈良線特急。大阪難波へ直通。"},
+ fromName:"近鉄奈良",toName:"大阪難波",bbox:[34.60,135.45,34.70,135.84],railTag:"rail",
+ fallback:[[34.6842,135.8275],[34.6722,135.7851],[34.6665,135.5012]]},
+{di:4,si:1,type:"tokkyu",name:"南海高野線 特急こうや1号",from:"なんば",dep:"10:00",to:"極楽橋",arr:"11:31",note:"1時間31分",
+ detail:{tip:"橋本以南は急峻な山間部。渓谷美が見所。特急券要。",info:"なんばで約1時間20分の待機あり。周辺で朝食・観光に活用可。"},
+ fromName:"なんば",toName:"極楽橋",bbox:[34.20,135.48,34.68,135.62],railTag:"rail",
+ fallback:[[34.6665,135.5012],[34.5831,135.4895],[34.4782,135.566],[34.3182,135.6148],[34.2531,135.607],[34.2344,135.5821]]},
+{di:4,si:2,type:"local",name:"高野山ケーブル（上山）",from:"極楽橋",dep:"11:42",to:"高野山",arr:"11:47",note:"5分",
+ detail:{tip:"高野山への唯一のアクセス。",warn:"滞在1時間では実質駅周辺のみ。"},
+ fallback:[[34.2344,135.5821],[34.2278,135.5776]]},
+{di:4,si:3,type:"local",name:"高野山ケーブル（下山）",from:"高野山",dep:"12:58",to:"極楽橋",arr:"13:03",note:"5分",
+ detail:{tip:"超短時間滞在（1時間）。ごま豆腐などお土産は駅前で。"},
+ fallback:[[34.2278,135.5776],[34.2344,135.5821]]},
+{di:4,si:4,type:"local",name:"南海高野線 各停",from:"極楽橋",dep:"13:16",to:"橋本",arr:"13:56",note:"40分",
+ detail:{tip:"山岳区間を下る各駅停車。橋本でJR和歌山線に乗換。"},
+ fromName:"極楽橋",toName:"橋本",bbox:[34.22,135.58,34.33,135.62],railTag:"rail",
+ fallback:[[34.2344,135.5821],[34.2531,135.607],[34.3182,135.6148]]},
+{di:4,si:5,type:"tokkyu",name:"JR和歌山線 普通",from:"橋本",dep:"14:07",to:"吉野口",arr:"14:42",note:"35分",
+ detail:{tip:"近鉄吉野線乗換駅の吉野口へ。"},
+ fromName:"橋本",toName:"吉野口",bbox:[34.30,135.60,34.43,135.77],railTag:"rail",
+ fallback:[[34.3182,135.6148],[34.3701,135.679],[34.4207,135.7503]]},
+{di:4,si:6,type:"local",name:"近鉄南大阪・吉野線 普通",from:"吉野口",dep:"14:48",to:"吉野",arr:"15:18",note:"30分",
+ detail:{tip:"終点手前から吉野山の山腹が広がる絶景。"},
+ fromName:"吉野口",toName:"吉野",bbox:[34.35,135.74,34.44,135.86],railTag:"rail",
+ fallback:[[34.4207,135.7503],[34.3901,135.7976],[34.3768,135.8535]]},
+{di:4,si:7,type:"kanko",name:"近鉄 観光特急 青の交響曲",from:"吉野",dep:"16:03",to:"大阪阿部野橋",arr:"17:22",note:"1時間19分",
+ detail:{tip:"ラウンジカーで地ビールや吉野クラフトジンを楽しみながらの移動が醍醐味。全席指定。",info:"3両編成・ネイビーブルーで統一したレトロ近代風。週末中心に運行。"},
+ fromName:"吉野",toName:"大阪阿部野橋",bbox:[34.37,135.49,34.65,135.86],railTag:"rail",
+ fallback:[[34.3768,135.8535],[34.4207,135.7503],[34.4782,135.566],[34.5831,135.4895],[34.6472,135.5132]]},
+{di:4,si:8,type:"bus",name:"Osaka Metro御堂筋線",from:"天王寺",dep:"17:22",to:"なんば",arr:"17:28",note:"6分",
+ detail:{tip:"天王寺〜なんばは地下鉄御堂筋線で2駅。"},
+ fallback:[[34.6472,135.5132],[34.6665,135.5012]]},
+// ── Day 6 ──
+{di:5,si:0,type:"tokkyu",name:"南海本線 特急サザン13号",from:"なんば",dep:"10:20",to:"和歌山市",arr:"11:18",note:"58分",
+ detail:{tip:"指定席は特急券要。一部車両は自由席。",info:"和歌山市駅からJR和歌山駅まで徒歩約10分。"},
+ fromName:"なんば",toName:"和歌山市",bbox:[34.20,135.15,34.68,135.51],railTag:"rail",
+ fallback:[[34.6665,135.5012],[34.5912,135.4789],[34.431,135.333],[34.2367,135.1667]]},
+{di:5,si:1,type:"local",name:"わかやま電鉄貴志川線（往路）",from:"和歌山",dep:"11:28",to:"貴志",arr:"12:00",note:"たま駅長で有名・32分",
+ detail:{tip:"ニタマ駅長（たまの後継）が駅長。いちご電車・おもちゃ電車など個性的な車両が走る。",info:"貴志駅での折り返しまで8分。猫型駅舎を撮影したらすぐ乗車。"},
+ fromName:"和歌山",toName:"貴志",bbox:[34.22,135.18,34.32,135.36],railTag:"rail",
+ fallback:[[34.2322,135.1918],[34.258,135.251],[34.287,135.3108],[34.301,135.3461]]},
+{di:5,si:2,type:"local",name:"わかやま電鉄貴志川線（折返）",from:"貴志",dep:"12:08",to:"伊太祈曽",arr:"12:20",note:"8分滞在後・12分",
+ detail:{tip:"伊太祁曽神社（木の神様）が徒歩5分。"},
+ fromName:"貴志",toName:"伊太祈曽",bbox:[34.27,135.30,34.32,135.36],railTag:"rail",
+ fallback:[[34.301,135.3461],[34.287,135.3108]]},
+{di:5,si:3,type:"local",name:"わかやま電鉄貴志川線（帰路）",from:"伊太祈曽",dep:"12:50",to:"和歌山",arr:"13:10",note:"30分待機後・20分",
+ detail:{warn:"この旅最大の勝負どころ。わかやま電鉄9番線からJR特急ホーム（4・5番線）へ連絡改札を通る必要あり。"},
+ fromName:"伊太祈曽",toName:"和歌山",bbox:[34.22,135.18,34.30,135.32],railTag:"rail",
+ fallback:[[34.287,135.3108],[34.258,135.251],[34.2322,135.1918]]},
+{di:5,si:4,type:"tokkyu",name:"JR紀勢本線 特急 くろしお11号",from:"和歌山",dep:"13:18",to:"紀伊勝浦",arr:"16:16",note:"2時間58分・太平洋沿いの絶景",
+ detail:{tip:"進行方向右側（D席）を指定すると熊野灘・太平洋の海岸線が延々と楽しめる。",info:"紀伊勝浦は本まぐろの水揚げ基地。到着後の55分で駅前市場のマグロ丼・寿司を調達するのが最高。"},
+ fromName:"和歌山",toName:"紀伊勝浦",bbox:[33.45,135.15,34.25,136.00],railTag:"rail",
+ fallback:[[34.2322,135.1918],[34.0564,135.1424],[33.7277,135.3648],[33.6853,135.3591],[33.4746,135.7851],[33.7255,135.9879],[33.6281,135.9418]]},
+{di:5,si:5,type:"tokkyu",name:"JR紀勢本線 特急 南紀8号",from:"紀伊勝浦",dep:"17:11",to:"四日市",arr:"20:15",note:"3時間4分・紀伊半島北上",
+ detail:{tip:"進行方向右側（A席）を指定すると海岸線が楽しめる。",info:"車内で調達した勝浦マグロ寿司を食べながらの旅が最高。"},
+ fromName:"紀伊勝浦",toName:"四日市",bbox:[33.60,135.60,34.97,136.70],railTag:"rail",
+ fallback:[[33.6281,135.9418],[33.8897,136.0988],[34.0743,136.1902],[34.5777,136.5274],[34.7342,136.5105],[34.963,136.6296]]},
+// ── Day 7 ──
+{di:6,si:0,type:"local",name:"あすなろう鉄道内部線（往路）",from:"あすなろう四日市",dep:"09:23",to:"内部",arr:"09:39",note:"ナローゲージ・16分",
+ detail:{tip:"軌間762mmのナローゲージ。現役の762mm軌間鉄道は国内でも非常に希少。"},
+ fromName:"あすなろう四日市",toName:"内部",bbox:[34.92,136.62,34.96,136.66],railTag:"rail",
+ fallback:[[34.963,136.6296],[34.9404,136.655]]},
+{di:6,si:1,type:"local",name:"あすなろう鉄道内部線（折返）",from:"内部",dep:"09:43",to:"日永",arr:"09:53",note:"10分",
+ detail:{tip:"日永で八王子線に乗換。"},
+ fromName:"内部",toName:"日永",bbox:[34.93,136.62,34.96,136.66],railTag:"rail",
+ fallback:[[34.9404,136.655],[34.949,136.6428]]},
+{di:6,si:2,type:"local",name:"あすなろう鉄道八王子線",from:"日永",dep:"09:54",to:"西日野",arr:"09:56",note:"⚠1分乗換・2分",warn:true,
+ detail:{warn:"1分乗換。同じ構内だが階段の位置を事前確認しておくこと。"},
+ fromName:"日永",toName:"西日野",bbox:[34.93,136.62,34.96,136.65],railTag:"rail",
+ fallback:[[34.949,136.6428],[34.945,136.629]]},
+{di:6,si:3,type:"local",name:"あすなろう鉄道八王子線（折返）",from:"西日野",dep:"10:02",to:"あすなろう四日市",arr:"10:11",note:"9分",
+ detail:{tip:"折り返してJR四日市まで29分徒歩。"},
+ fallback:[[34.945,136.629],[34.949,136.6428],[34.963,136.6296]]},
+{di:6,si:4,type:"tokkyu",name:"JR関西本線快速",from:"四日市",dep:"10:40",to:"亀山",arr:"11:07",note:"27分",
+ detail:{tip:"亀山で非電化区間（キハ）に乗換。"},
+ fromName:"四日市",toName:"亀山",bbox:[34.84,136.43,34.97,136.65],railTag:"rail",
+ fallback:[[34.963,136.6296],[34.8501,136.4505]]},
+{di:6,si:5,type:"tokkyu",name:"JR関西本線 普通（キハ気動車）",from:"亀山",dep:"11:14",to:"柘植",arr:"11:40",note:"非電化・26分",
+ detail:{tip:"ディーゼルのキハ系気動車。静かな山間部を走るローカル色豊かな区間。",info:"亀山〜加茂間は本数が極めて少ない。乗り遅れ厳禁。"},
+ fromName:"亀山",toName:"柘植",bbox:[34.82,136.20,34.87,136.47],railTag:"rail",
+ fallback:[[34.8501,136.4505],[34.847,136.2557]]},
+{di:6,si:6,type:"local",name:"JR草津線 普通（柘植→貴生川）",from:"柘植",dep:"12:01",to:"貴生川",arr:"12:18",note:"17分",
+ detail:{tip:"信楽高原鐵道の乗換駅・貴生川（きぶかわ）へ。"},
+ fromName:"柘植",toName:"貴生川",bbox:[34.84,136.10,34.96,136.28],railTag:"rail",
+ fallback:[[34.847,136.2557],[34.9522,136.1538]]},
+{di:6,si:7,type:"local",name:"信楽高原鐵道（往路）",from:"貴生川",dep:"12:24",to:"信楽",arr:"12:48",note:"24分",
+ detail:{tip:"信楽焼・たぬきの産地を走るローカル線。ICカード不可。現金230円程度。",info:"信楽駅前に巨大なたぬきの像。"},
+ fromName:"貴生川",toName:"信楽",bbox:[34.85,136.05,34.97,136.18],railTag:"rail",
+ fallback:[[34.9522,136.1538],[34.8771,136.0613]]},
+{di:6,si:8,type:"local",name:"信楽高原鐵道（折返）",from:"信楽",dep:"12:54",to:"貴生川",arr:"13:17",note:"23分",
+ detail:{tip:"折り返して貴生川へ。その後JR草津線で草津→京都へ。"},
+ fallback:[[34.8771,136.0613],[34.9522,136.1538]]},
+{di:6,si:9,type:"local",name:"JR草津線 普通（貴生川→草津）",from:"貴生川",dep:"13:22",to:"草津",arr:"13:47",note:"25分",
+ detail:{tip:"草津でJR琵琶湖線に乗換え京都へ。"},
+ fromName:"貴生川",toName:"草津",bbox:[34.95,135.93,35.05,136.18],railTag:"rail",
+ fallback:[[34.9522,136.1538],[35.0229,135.9627]]},
+{di:6,si:10,type:"tokkyu",name:"JR神戸・京都線 新快速",from:"草津",dep:"13:52",to:"京都",arr:"14:13",note:"21分・京都で2.5時間フリー",
+ detail:{tip:"京都では約2時間半のフリータイム。錦市場や京都駅ビルでお土産・夕食を。",info:"京都駅THE CUBE（地下・11階）は食事・土産に最適。"},
+ fromName:"草津",toName:"京都",bbox:[34.97,135.72,35.03,135.97],railTag:"rail",
+ fallback:[[35.0229,135.9627],[34.9858,135.7588]]},
+{di:6,si:11,type:"kanko",name:"近鉄京都線 特急 あをによし",from:"京都",dep:"16:50",to:"大阪難波",arr:"18:16",note:"1時間26分・プレミアム観光特急",
+ detail:{tip:"ハイデッカー構造で眺望良好。車内販売でスイーツ・地酒を楽しめる。",info:"「あをによし」は万葉集の枕詞で奈良の意。1・2号車は「デラックス車両」でより豪華。"},
+ fromName:"京都",toName:"大阪難波",bbox:[34.60,135.45,35.00,135.80],railTag:"rail",
+ fallback:[[34.9858,135.7588],[34.6722,135.7851],[34.6665,135.5012]]},
+{di:6,si:12,type:"tokkyu",name:"阪神なんば線 普通",from:"大阪難波",dep:"18:19",to:"尼崎",arr:"18:42",note:"⚠3分乗換・23分",warn:true,
+ detail:{warn:"近鉄特急到着から3分で阪神なんば線が発車。早歩きが必要。前方車両に乗ると便利。"},
+ fromName:"大阪難波",toName:"尼崎",bbox:[34.66,135.39,34.73,135.51],railTag:"rail",
+ fallback:[[34.6665,135.5012],[34.6791,135.458],[34.716,135.401]]},
+{di:6,si:13,type:"tokkyu",name:"阪神本線直通特急",from:"尼崎",dep:"18:50",to:"山陽姫路",arr:"20:34",note:"1時間44分",
+ detail:{tip:"神戸の街並み・明石海峡大橋方面の夜景が楽しめる。姫路まで乗換なし。"},
+ fromName:"尼崎",toName:"山陽姫路",bbox:[34.68,134.68,34.84,135.42],railTag:"rail",
+ fallback:[[34.716,135.401],[34.6911,135.1954],[34.6535,134.9987],[34.8268,134.6909]]},
+// ── Day 8 ──
+{di:7,si:0,type:"shinkansen",name:"JR山陽新幹線 さくら753号",from:"姫路",dep:"11:50",to:"岡山",arr:"12:09",note:"19分",
+ detail:{tip:"岡山で瀬戸大橋線に乗換え四国へ向かう。"},
+ fromName:"姫路",toName:"岡山",bbox:[34.60,133.90,34.84,134.70],railTag:"rail",
+ fallback:[[34.8268,134.6909],[34.6661,133.9177]]},
+{di:7,si:1,type:"tokkyu",name:"JR瀬戸大橋線 特急 しおかぜ11号",from:"岡山",dep:"12:35",to:"松山",arr:"15:17",note:"瀬戸大橋を渡り四国へ・2h42m",
+ detail:{tip:"瀬戸大橋上（約13分）は両側の瀬戸内海の島々が絶景。",info:"松山到着から17:42まで2時間25分のフリータイム。道後温泉入浴の絶好のチャンス。"},
+ fromName:"岡山",toName:"松山",bbox:[33.78,132.75,34.68,133.95],railTag:"rail",
+ fallback:[[34.6661,133.9177],[34.4866,133.8281],[34.3266,133.8404],[34.2753,133.7524],[34.0619,132.999],[33.951,132.817],[33.840,132.7511]]},
+{di:7,si:2,type:"bus",name:"伊予鉄道市内線（路面電車）",from:"松山駅前",dep:"17:42",to:"大手町",arr:"17:44",note:"2分",
+ detail:{tip:"大手町で郊外線（高浜線）に乗換。"},
+ fallback:[[33.840,132.7511],[33.8417,132.754]]},
+{di:7,si:3,type:"local",name:"伊予鉄道高浜線 普通",from:"大手町",dep:"17:47",to:"高浜",arr:"18:06",note:"港へ・19分",
+ detail:{warn:"NAVITIME規定では徒歩24分だが、港連動の伊予鉄バスを使えば3〜5分で到着。バス時刻を事前確認。"},
+ fromName:"大手町",toName:"高浜",bbox:[33.83,132.71,33.88,132.76],railTag:"rail",
+ fallback:[[33.8417,132.754],[33.857,132.733],[33.872,132.7119]]},
+{di:7,si:4,type:"ferry",name:"石崎汽船 スーパージェット",from:"松山観光港",dep:"18:30",to:"広島宇品港",arr:"19:50",note:"高速双胴船・1時間20分",
+ detail:{tip:"通常フェリー（2h40m）の半分の時間で広島へ。瀬戸内の島々を縫うように疾走する絶景ルート。要予約。"},
+ fallback:[[33.874,132.705],[34.05,132.58],[34.20,132.51],[34.356,132.451]]},
+{di:7,si:5,type:"bus",name:"広島電鉄5号線（路面電車）",from:"広島港",dep:"20:03",to:"広島駅",arr:"20:32",note:"29分",
+ detail:{tip:"広島港〜広島駅を直通。乗換なし。ICカード利用可。"},
+ fromName:"広島港",toName:"広島",bbox:[34.34,132.44,34.41,132.48],railTag:"tram",
+ fallback:[[34.356,132.451],[34.374,132.461],[34.3974,132.4756]]},
+// ── Day 9 ──
+{di:8,si:0,type:"kanko",name:"JR山陽本線 etSETOra",from:"広島",dep:"09:32",to:"福山",arr:"12:53",note:"3時間21分・瀬戸内観光列車",
+ detail:{tip:"赤いボディのキハ47形改造車。瀬戸内の名所を巡りながらスイーツサービスあり。全席指定。",info:"etSETOra＝etcetera（その他）＋setouchi（瀬戸内）の造語。"},
+ fromName:"広島",toName:"福山",bbox:[34.38,132.46,34.53,133.40],railTag:"rail",
+ fallback:[[34.3974,132.4756],[34.4065,133.2082],[34.4018,133.0842],[34.4893,133.3614]]},
+{di:8,si:1,type:"shinkansen",name:"JR山陽新幹線 のぞみ25号",from:"福山",dep:"14:04",to:"広島",arr:"14:27",note:"⚠広島到着から在来線まで3分",warn:true,
+ detail:{warn:"広島到着（14:27）から在来線（14:30）まで3分。新幹線前方車両に乗り降車後すぐ連絡改札をダッシュ。"},
+ fromName:"福山",toName:"広島",bbox:[34.37,132.45,34.50,133.40],railTag:"rail",
+ fallback:[[34.4893,133.3614],[34.3974,132.4756]]},
+{di:8,si:2,type:"tokkyu",name:"JR山陽本線 普通",from:"広島",dep:"14:30",to:"宮島口",arr:"14:57",note:"27分",
+ detail:{tip:"宮島口からJRフェリーで宮島へ渡れる。"},
+ fromName:"広島",toName:"宮島口",bbox:[34.30,132.27,34.41,132.49],railTag:"rail",
+ fallback:[[34.3974,132.4756],[34.3121,132.3027]]},
+{di:8,si:3,type:"ferry",name:"JR宮島航路",from:"宮島口",dep:"15:10",to:"宮島",arr:"15:20",note:"10分",
+ detail:{tip:"厳島神社まで往復30〜40分のため滞在はかなりタイト。",info:"大鳥居は干潮時に根元まで歩いて近づける。"},
+ fallback:[[34.3121,132.3027],[34.2955,132.3198]]},
+{di:8,si:4,type:"ferry",name:"世界遺産航路（アクアネット広島）",from:"宮島",dep:"16:25",to:"平和公園＜元安橋＞",arr:"17:10",note:"高速船45分・原爆ドームへ直行",
+ detail:{tip:"宮島から直接、原爆ドーム前の元安橋へ着岸。通常ルートより大幅時短かつ川からの眺めも新鮮。要予約（約2,400円）。"},
+ fallback:[[34.2955,132.3198],[34.340,132.370],[34.394,132.454]]},
+{di:8,si:5,type:"bus",name:"広島電鉄6号線（路面電車）",from:"原爆ドーム前",dep:"18:35",to:"広島駅",arr:"18:51",note:"16分",
+ detail:{tip:"平和記念公園から広島駅へ。広電6号線で直通。"},
+ fallback:[[34.394,132.454],[34.3974,132.4756]]},
+{di:8,si:6,type:"shinkansen",name:"JR山陽新幹線 こだま959号",from:"広島",dep:"19:08",to:"新下関",arr:"20:20",note:"1時間12分",
+ detail:{tip:"各駅停車の「こだま」。夕暮れの広島〜山口の車窓。"},
+ fromName:"広島",toName:"新下関",bbox:[34.00,130.93,34.41,132.49],railTag:"rail",
+ fallback:[[34.3974,132.4756],[34.177,131.816],[34.0057,130.948]]},
+// ── Day 10 ──
+{di:9,si:0,type:"kanko",name:"JR山陰本線 〇〇のはなし",from:"新下関",dep:"09:54",to:"東萩",arr:"12:56",note:"3時間2分・山陰の観光列車",
+ detail:{tip:"下関〜東萩を結ぶ観光列車。山陰の海岸線・日本海の荒波と漁村の景観が続く。全席指定。",warn:"東萩到着（12:56）から津和野行きバス（13:00）まで4分。車内でスタンバイし到着後すぐバス停へ。"},
+ fromName:"新下関",toName:"東萩",bbox:[34.00,130.93,34.45,131.45],railTag:"rail",
+ fallback:[[34.0057,130.948],[34.108,131.178],[34.214,131.228],[34.340,131.298],[34.405,131.348],[34.4172,131.4103]]},
+{di:9,si:1,type:"bus",name:"防長交通 路線バス（津和野行き）",from:"東萩駅前",dep:"13:00",to:"津和野駅",arr:"14:45",note:"⚠4分乗換・1時間45分",warn:true,
+ detail:{warn:"津和野行きバスは1日数本しかない。逃すとタクシーを使う他ない。現金を事前準備。",tip:"山陰の山間部を走る路線バス。中国山地の山並みが続く。"},
+ fallback:[[34.4172,131.4103],[34.443,131.572],[34.4725,131.7737]]},
+{di:9,si:2,type:"kanko",name:"JR山口線 SLやまぐち号",from:"津和野",dep:"16:12",to:"新山口",arr:"18:00",note:"1時間48分・蒸気機関車",
+ detail:{tip:"「貴婦人」の愛称で知られるC57形蒸気機関車牽引。昭和初期の雰囲気が漂う旧型客車。煙と汽笛が鉄道ファンの心をつかむ。",info:"全席指定。春〜秋の週末中心に運行。発売日に即完売する便も多い。"},
+ fromName:"津和野",toName:"新山口",bbox:[34.09,131.37,34.48,131.80],railTag:"rail",
+ fallback:[[34.4725,131.7737],[34.358,131.600],[34.1861,131.4714],[34.0933,131.3966]]},
+{di:9,si:3,type:"shinkansen",name:"JR山陽新幹線 のぞみ43号",from:"新山口",dep:"19:34",to:"博多",arr:"20:09",note:"35分",
+ detail:{tip:"乗換まで約1時間半あり。新山口駅2階「プレミアムお土産横丁」で山口名物（外郎・瓦そば）を調達可。"},
+ fromName:"新山口",toName:"博多",bbox:[33.58,130.38,34.10,131.42],railTag:"rail",
+ fallback:[[34.0933,131.3966],[33.885,130.817],[33.590,130.4206]]},
+// ── Day 11 ──
+{di:10,si:0,type:"tokkyu",name:"JR鹿児島本線 特急 みどり23号",from:"博多",dep:"11:37",to:"有田",arr:"12:54",note:"1時間17分",
+ detail:{tip:"有田は有田焼の産地。松浦鉄道乗換まで6分あり駅前を素早く見学可能。"},
+ fromName:"博多",toName:"有田",bbox:[33.18,129.87,33.60,130.43],railTag:"rail",
+ fallback:[[33.590,130.4206],[33.3781,130.508],[33.2646,130.2993],[33.1962,130.0223],[33.1838,129.8818]]},
+{di:10,si:1,type:"local",name:"松浦鉄道（有田→伊万里）",from:"有田",dep:"13:00",to:"伊万里",arr:"13:24",note:"24分",
+ detail:{tip:"JRから松浦鉄道へ乗換。有田駅は改札が分かれているため注意。",info:"伊万里も陶磁器の産地。"},
+ fromName:"有田",toName:"伊万里",bbox:[33.18,129.86,33.28,129.90],railTag:"rail",
+ fallback:[[33.1838,129.8818],[33.2719,129.8767]]},
+{di:10,si:2,type:"local",name:"松浦鉄道（伊万里→たびら平戸口）",from:"伊万里",dep:"13:37",to:"たびら平戸口",arr:"14:46",note:"日本最西端（普通鉄道）へ・1h9m",
+ detail:{tip:"「普通鉄道における日本最西端の駅」。駅舎内に鉄道記念館あり。記念入場券・最西端証明書も販売。",info:"1時間の滞在。記念撮影・グッズ購入に最適な時間配分。"},
+ fromName:"伊万里",toName:"たびら平戸口",bbox:[33.26,129.57,33.38,129.90],railTag:"rail",
+ fallback:[[33.2719,129.8767],[33.3443,129.7079],[33.3625,129.5826]]},
+{di:10,si:3,type:"local",name:"松浦鉄道（たびら平戸口→佐々）",from:"たびら平戸口",dep:"15:46",to:"佐々",arr:"16:21",note:"1時間滞在後・35分",
+ detail:{tip:"佐々で1時間25分の待機。神崎鼻（日本最西端の地）へタクシーで行くプランも（片道10〜15分）。"},
+ fromName:"たびら平戸口",toName:"佐々",bbox:[33.23,129.57,33.37,129.70],railTag:"rail",
+ fallback:[[33.3625,129.5826],[33.3068,129.6271],[33.2826,129.6673],[33.2367,129.6469]]},
+{di:10,si:4,type:"local",name:"松浦鉄道（佐々→佐世保）",from:"佐々",dep:"17:46",to:"佐世保",arr:"18:27",note:"1時間25分待機後・41分",
+ detail:{tip:"松浦鉄道の終点・佐世保。佐世保バーガー発祥の地。乗換まで43分あり、駅周辺でバーガーを食べる絶好のタイミング。"},
+ fromName:"佐々",toName:"佐世保",bbox:[33.16,129.63,33.25,129.73],railTag:"rail",
+ fallback:[[33.2367,129.6469],[33.2089,129.722],[33.1639,129.7257]]},
+{di:10,si:5,type:"tokkyu",name:"JR佐世保線 特急 みどり（リレーかもめ）56号",from:"佐世保",dep:"19:10",to:"武雄温泉",arr:"19:54",note:"44分",
+ detail:{tip:"武雄温泉で西九州新幹線「かもめ」に対面接続。同一ホームでスムーズに乗換。"},
+ fromName:"佐世保",toName:"武雄温泉",bbox:[33.16,129.72,33.28,130.03],railTag:"rail",
+ fallback:[[33.1639,129.7257],[33.233,129.865],[33.1962,130.0223]]},
+{di:10,si:6,type:"shinkansen",name:"JR西九州新幹線 かもめ55号",from:"武雄温泉",dep:"20:05",to:"長崎",arr:"20:24",note:"対面乗換→新幹線24分",
+ detail:{tip:"2022年9月開業。N700S系使用。武雄温泉〜長崎66kmを24分で結ぶ。長崎駅は高架化された新しい駅舎。"},
+ fromName:"武雄温泉",toName:"長崎",bbox:[32.75,129.86,33.21,130.04],railTag:"rail",
+ fallback:[[33.1962,130.0223],[33.125,130.002],[32.923,129.931],[32.851,130.0416],[32.7531,129.8705]]},
+// ── Day 12 ──
+{di:11,si:0,type:"taxi",name:"タクシー（長崎→瀬戸港）",from:"長崎",dep:"11:12",to:"瀬戸港",arr:"12:24",note:"1時間11分・約15,790円",
+ detail:{tip:"事前にタクシー会社に予約しておくと安心。",warn:"フェリー出港（12:44）に余裕を持って到着するため11:12出発はほぼ必須。"},
+ fallback:[[32.7531,129.8705],[32.840,129.780],[32.8915,129.7197]]},
+{di:11,si:1,type:"ferry",name:"西海沿岸商船フェリー（往路）",from:"瀬戸港",dep:"12:44",to:"池島港",arr:"13:17",note:"炭鉱の島へ・33分",
+ detail:{tip:"炭鉱で栄えた池島。2001年閉山後も住民が暮らす廃墟観光の聖地。廃墟化した高層アパートや炭鉱施設跡が見られる。",info:"島内は軽トラタクシー（島民が案内）で観光可能。3時間43分の絶妙な滞在時間。"},
+ fallback:[[32.8915,129.7197],[32.882,129.7044]]},
+{di:11,si:2,type:"ferry",name:"西海沿岸商船フェリー（帰路）",from:"池島港",dep:"17:00",to:"瀬戸港",arr:"17:40",note:"島観光後・40分",
+ detail:{tip:"池島での観光後、瀬戸港へ戻る。タクシーでハウステンボスへショートカット。"},
+ fallback:[[32.882,129.7044],[32.8915,129.7197]]},
+{di:11,si:3,type:"taxi",name:"タクシー（瀬戸港→ハウステンボス）",from:"瀬戸港",dep:"17:40",to:"ハウステンボス",arr:"18:17",note:"37分・約8,450円",
+ detail:{tip:"瀬戸港からJR大村線のハウステンボス駅へ。タクシーでショートカット。通常ルートより30分以上短縮。"},
+ fallback:[[32.8915,129.7197],[33.000,129.740],[33.0919,129.7965]]},
+{di:11,si:4,type:"local",name:"JR大村線 普通",from:"ハウステンボス",dep:"18:36",to:"新大村",arr:"19:19",note:"43分",
+ detail:{tip:"西九州新幹線の接続駅・新大村へ。新大村から長崎空港まではタクシーで10分。"},
+ fromName:"ハウステンボス",toName:"新大村",bbox:[32.90,129.79,33.10,129.98],railTag:"rail",
+ fallback:[[33.0919,129.7965],[33.064,129.864],[33.013,129.945],[32.940,129.953],[32.923,129.931]]},
+{di:11,si:5,type:"taxi",name:"タクシー（新大村→長崎空港）",from:"新大村",dep:"19:19",to:"長崎空港",arr:"19:29",note:"10分・約2,020円",
+ detail:{tip:"長崎空港はフェリーターミナルも兼ねる。航空側ターミナルへ向かうこと。"},
+ fallback:[[32.923,129.931],[32.917,129.914]]},
+{di:11,si:6,type:"plane",name:"航空便 長崎→羽田",from:"長崎空港",dep:"20:30",to:"羽田空港",arr:"22:10",note:"1時間40分・旅のフィニッシュ！",
+ detail:{tip:"12日間の大旅行の締めくくり。空港でカステラや角煮まんを手土産に。お疲れさまでした！"},
+ fallback:[[32.917,129.914],[35.5494,139.7798]]},
+];
+
+// =====================================================================
+// ローカルストレージキャッシュ
+// =====================================================================
+function cacheGet(query) {
+  try {
+    const raw = localStorage.getItem("osm_" + btoa(unescape(encodeURIComponent(query))));
+    if (!raw) return null;
+    const {ts, data} = JSON.parse(raw);
+    if (Date.now() - ts > CACHE_TTL) { localStorage.removeItem("osm_" + btoa(unescape(encodeURIComponent(query)))); return null; }
+    return data;
+  } catch(e) { return null; }
+}
+function cacheSet(query, data) {
+  try {
+    const key = "osm_" + btoa(unescape(encodeURIComponent(query)));
+    localStorage.setItem(key, JSON.stringify({ts: Date.now(), data}));
+  } catch(e) {}
+}
+function clearCache() {
+  const keys = Object.keys(localStorage).filter(k => k.startsWith("osm_"));
+  keys.forEach(k => localStorage.removeItem(k));
+  alert(`キャッシュを${keys.length}件削除しました。ページをリロードすると再取得します。`);
+}
+
+// =====================================================================
+// Overpass API（キャッシュ付き・同時実行数制限付き）
+// =====================================================================
+async function fetchOverpass(query) {
+  const cached = cacheGet(query);
+  if (cached) return cached;
+  for (const ep of ENDPOINTS) {
+    try {
+      const res = await fetch(ep, {
+        method:"POST",
+        headers:{"Content-Type":"application/x-www-form-urlencoded"},
+        body:"data="+encodeURIComponent(query),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      cacheSet(query, data);
+      return data;
+    } catch(e) {}
+  }
+  return null;
+}
+
+// 同時実行数制限付き並列実行
+async function runWithConcurrency(tasks, limit) {
+  const executing = new Set();
+  for (const task of tasks) {
+    const p = (async () => { try { await task(); } catch(e) {} })();
+    p.finally(() => executing.delete(p));
+    executing.add(p);
+    if (executing.size >= limit) await Promise.race(executing);
+  }
+  await Promise.allSettled([...executing]);
+}
+
+// =====================================================================
+// 線路geometry抽出（BFSで2駅間のみ）
+// =====================================================================
+function haversine(a, b) {
+  const R = 6371000, dLat = (b[0]-a[0])*Math.PI/180, dLon = (b[1]-a[1])*Math.PI/180;
+  const x = Math.sin(dLat/2)**2 + Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.asin(Math.sqrt(x));
+}
+
+function buildSyntheticGraph(wayElements) {
+  const nodes = {}, adj = {};
+  let id = 1e9;
+  for (const el of wayElements) {
+    if (el.type !== "way") continue;
+    const geom = el.geometry;
+    if (!geom || geom.length < 2) continue;
+    const ids = geom.map(g => {
+      const nid = id++;
+      nodes[nid] = [g.lat, g.lon];
+      return nid;
+    });
+    for (let i = 0; i < ids.length - 1; i++) {
+      const a = ids[i], b = ids[i+1];
+      (adj[a] = adj[a]||[]).push(b);
+      (adj[b] = adj[b]||[]).push(a);
+    }
+  }
+  return {nodes, adj};
+}
+
+function nearestNode(nodes, coord) {
+  let bestId = null, bestD = Infinity;
+  for (const [id, pos] of Object.entries(nodes)) {
+    const d = haversine(pos, coord);
+    if (d < bestD) { bestD = d; bestId = id; }
+  }
+  return bestId;
+}
+
+function bfsPath(adj, startId, endId, maxNodes = 5000) {
+  if (startId === endId) return [startId];
+  const visited = new Set([String(startId)]);
+  const queue = [[startId, [startId]]];
+  let count = 0;
+  while (queue.length > 0 && count++ < maxNodes) {
+    const [cur, path] = queue.shift();
+    for (const next of (adj[cur]||[])) {
+      const nk = String(next);
+      if (nk === String(endId)) return [...path, next];
+      if (!visited.has(nk)) {
+        visited.add(nk);
+        queue.push([next, [...path, next]]);
+      }
+    }
+  }
+  return null;
+}
+
+async function fetchRailCoords(seg) {
+  const [S,W,N,E] = seg.bbox;
+  const railTag = seg.railTag || "rail";
+
+  // 駅検索クエリ
+  const stQuery = `[out:json][timeout:20];(node["railway"="station"]["name"="${seg.fromName}"](${S},${W},${N},${E});node["railway"="halt"]["name"="${seg.fromName}"](${S},${W},${N},${E});node["railway"="tram_stop"]["name"="${seg.fromName}"](${S},${W},${N},${E});node["railway"="station"]["name"="${seg.toName}"](${S},${W},${N},${E});node["railway"="halt"]["name"="${seg.toName}"](${S},${W},${N},${E});node["railway"="tram_stop"]["name"="${seg.toName}"](${S},${W},${N},${E}););out body;`;
+  // 線路クエリ（railway=railまたはtramのみ、道路除外）
+  const wayQuery = `[out:json][timeout:40];way["railway"="${railTag}"](${S},${W},${N},${E});out geom;`;
+
+  const [stData, wayData] = await Promise.all([
+    fetchOverpass(stQuery).catch(()=>null),
+    fetchOverpass(wayQuery).catch(()=>null),
+  ]);
+
+  if (!wayData?.elements) return null;
+  const wayEls = wayData.elements.filter(e => e.type==="way");
+  if (wayEls.length === 0) return null;
+
+  // 駅座標特定
+  let fromCoord = null, toCoord = null;
+  if (stData?.elements) {
+    const fromNodes = stData.elements.filter(e => e.type==="node" && e.tags?.name?.includes(seg.fromName));
+    const toNodes   = stData.elements.filter(e => e.type==="node" && e.tags?.name?.includes(seg.toName));
+    if (fromNodes.length > 0) fromCoord = [fromNodes[0].lat, fromNodes[0].lon];
+    if (toNodes.length > 0)   toCoord   = [toNodes[0].lat,  toNodes[0].lon];
+  }
+
+  // fallback座標から始終点を推定
+  if (!fromCoord && seg.fallback?.length > 0) fromCoord = seg.fallback[0];
+  if (!toCoord   && seg.fallback?.length > 1) toCoord   = seg.fallback[seg.fallback.length-1];
+  if (!fromCoord || !toCoord) return null;
+
+  // グラフ構築・BFS
+  const {nodes, adj} = buildSyntheticGraph(wayEls);
+  if (Object.keys(nodes).length === 0) return null;
+
+  const startId = nearestNode(nodes, fromCoord);
+  const endId   = nearestNode(nodes, toCoord);
+  if (!startId || !endId) return null;
+
+  const path = bfsPath(adj, startId, endId);
+  if (!path || path.length < 2) return null;
+
+  return path.map(id => nodes[id]).filter(Boolean);
+}
+
+// =====================================================================
+// 地図・ポリライン管理
+// =====================================================================
+const map = L.map('map').setView([35.0, 134.5], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom:19
+}).addTo(map);
+
+const plMap = {}; // key→{fallback?:pl, osm?:pl}
+let activePl = null, activeRow = null;
+
+function makePl(coords, seg) {
+  const t = T[seg.type];
+  const pl = L.polyline(coords, {color:t.color, weight:t.w, dashArray:t.dash, opacity:0.85});
+  pl._baseW = t.w; pl._active = false;
+  pl.bindTooltip(
+    `<b>${seg.name}</b><br>${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b><br><span style="color:#666">${seg.note}</span>`,
+    {sticky:true, direction:'top'}
+  );
+  pl.on('mouseover', function(){ if(!this._active) this.setStyle({weight:this._baseW+2,opacity:1}); });
+  pl.on('mouseout',  function(){ if(!this._active) this.setStyle({weight:this._baseW,opacity:0.85}); });
+  pl.on('click', ()=> selectSeg(seg.di, seg.si));
+  return pl;
+}
+
+function putFallback(seg) {
+  if (!seg.fallback?.length) return;
+  const key = `${seg.di}-${seg.si}`;
+  if (plMap[key]?.osm || plMap[key]?.fallback) return;
+  const pl = makePl(seg.fallback, seg);
+  pl.addTo(map);
+  plMap[key] = {fallback: pl};
+}
+
+function putOsm(seg, coords) {
+  const key = `${seg.di}-${seg.si}`;
+  const entry = plMap[key] || {};
+  // fallbackを削除
+  if (entry.fallback) { map.removeLayer(entry.fallback); delete entry.fallback; }
+  // 既存OSMも削除
+  if (entry.osm) { map.removeLayer(entry.osm); }
+  const pl = makePl(coords, seg);
+  pl.addTo(map);
+  plMap[key] = {osm: pl};
+  const icon = document.getElementById(`icon-${seg.di}-${seg.si}`);
+  if (icon) icon.textContent = '🗺';
+}
+
+function getActivePl(di, si) {
+  const e = plMap[`${di}-${si}`];
+  return e?.osm || e?.fallback || null;
+}
+
+function resetActive() {
+  if (activePl) { activePl._active=false; activePl.setStyle({weight:activePl._baseW,opacity:0.85}); activePl=null; }
+  if (activeRow) { activeRow.classList.remove('active'); activeRow=null; }
+}
+function selectSeg(di, si) {
+  resetActive();
+  const pl = getActivePl(di, si);
+  if (!pl) return;
+  pl._active=true; pl.setStyle({weight:pl._baseW+3,opacity:1}); activePl=pl;
+  map.fitBounds(pl.getBounds(), {padding:[50,50]});
+  const row = document.getElementById(`r-${di}-${si}`);
+  if (row) { row.classList.add('active'); row.scrollIntoView({block:'nearest'}); activeRow=row; }
+  const seg = SEGS.find(s=>s.di===di&&s.si===si);
+  if (seg) showDet(seg);
+}
+function showDet(seg) {
+  const t=T[seg.type], d=seg.detail||{};
+  const title = document.getElementById('det-title');
+  title.textContent = seg.name;
+  const body = document.getElementById('det-body');
+  body.innerHTML = '';
+  const badge = document.createElement('div');
+  badge.className='det-badge';
+  badge.style.cssText=`background:${t.color}22;color:${t.color}`;
+  badge.textContent=t.label;
+  body.appendChild(badge);
+  const route = document.createElement('div');
+  route.className='det-route';
+  const h3=document.createElement('h3'); h3.textContent=`${seg.from} ${seg.dep} → ${seg.to} ${seg.arr}`;
+  const p=document.createElement('p'); p.textContent=seg.note;
+  route.appendChild(h3); route.appendChild(p);
+  body.appendChild(route);
+  [['tip','box-tip'],['warn','box-warn'],['info','box-info']].forEach(([k,cls])=>{
+    if (d[k]) { const el=document.createElement('div'); el.className=cls; el.textContent=d[k]; body.appendChild(el); }
+  });
+  document.getElementById('det').style.display='block';
+}
+function closeDet() { document.getElementById('det').style.display='none'; resetActive(); }
+
+// =====================================================================
+// パネル構築
+// =====================================================================
+const panelBody = document.getElementById('panel-body');
+let prevDi = -1;
+for (const seg of SEGS) {
+  if (seg.di !== prevDi) {
+    const blk=document.createElement('div'); blk.className='day-block'; blk.id=`day-${seg.di}`;
+    const dl=document.createElement('div'); dl.className='day-label';
+    dl.textContent=DAY_LABELS[seg.di];
+    blk.appendChild(dl); panelBody.appendChild(blk); prevDi=seg.di;
+  }
+  const t=T[seg.type];
+  const blk=document.getElementById(`day-${seg.di}`);
+  const row=document.createElement('div'); row.className='seg-row'; row.id=`r-${seg.di}-${seg.si}`;
+  // 各要素をtextContentで構築（XSS対策）
+  const nameRow=document.createElement('div'); nameRow.style.display='flex'; nameRow.style.alignItems='center';
+  const dot=document.createElement('span'); dot.className='seg-dot'; dot.style.background=t.color;
+  const nameEl=document.createElement('span'); nameEl.className='seg-name'; nameEl.textContent=seg.name;
+  nameRow.appendChild(dot); nameRow.appendChild(nameEl);
+  const timeEl=document.createElement('div'); timeEl.className='seg-time';
+  timeEl.textContent=`${seg.from} ${seg.dep} → ${seg.to} ${seg.arr}`;
+  // 時刻の太字
+  const timeHtml = `${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b>`;
+  timeEl.innerHTML = timeHtml;
+  const noteEl=document.createElement('div'); noteEl.className='seg-note'+(seg.warn?' warn':'');
+  noteEl.textContent=seg.note;
+  const icon=document.createElement('span'); icon.className='seg-icon'; icon.id=`icon-${seg.di}-${seg.si}`;
+  icon.textContent=seg.fromName?'⏳':'';
+  row.appendChild(nameRow); row.appendChild(timeEl); row.appendChild(noteEl); row.appendChild(icon);
+  row.addEventListener('click', ()=>selectSeg(seg.di, seg.si));
+  blk.appendChild(row);
+}
+
+// 凡例
+const legBar=document.getElementById('legend');
+for (const [,t] of Object.entries(T)) {
+  const el=document.createElement('div'); el.className='leg-item';
+  const line=document.createElement('div'); line.className='leg-line'; line.style.background=t.color;
+  const label=document.createTextNode(t.label);
+  el.appendChild(line); el.appendChild(label); legBar.appendChild(el);
+}
+
+// =====================================================================
+// 読み込み実行
+// =====================================================================
+let done=0;
+const total=SEGS.length;
+document.getElementById('progress-label').textContent=`0/${total}`;
+
+async function loadOneSeg(seg) {
+  // 1. フォールバックを即座に描画
+  putFallback(seg);
+
+  // 2. OSMクエリがある区間のみ精細化
+  if (seg.fromName && seg.toName && seg.bbox) {
+    let coords = null;
+    try {
+      coords = await fetchRailCoords(seg);
+    } catch(e) {}
+    const icon = document.getElementById(`icon-${seg.di}-${seg.si}`);
+    if (coords && coords.length >= 2) {
+      putOsm(seg, coords);
+    } else {
+      if (icon) icon.textContent = '⚠'; // 取得失敗を明示
+    }
+  }
+
+  done++;
+  const pct = Math.round(done/total*100);
+  document.getElementById('progress-fill').style.width = pct+'%';
+  document.getElementById('progress-label').textContent = `${done}/${total}`;
+  if (done >= total) {
+    document.getElementById('status-text').textContent = '✅ 読み込み完了';
+    // 全ルートにfitBounds
+    const allPls = Object.values(plMap).map(e=>e.osm||e.fallback).filter(Boolean);
+    if (allPls.length > 0) {
+      try { map.fitBounds(L.featureGroup(allPls).getBounds(), {padding:[20,20]}); } catch(e){}
+    }
+  }
+}
+
+// 全区間を同時実行数制限付きで並列実行
+runWithConcurrency(SEGS.map(seg => () => loadOneSeg(seg)), CONCURRENCY);
+</script>
+</body>
+</html>
