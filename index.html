@@ -126,6 +126,7 @@ const SEGS = [
 {di:0,si:0,type:"shinkansen",name:"北陸新幹線 かがやき513号",from:"東京",dep:"17:24",to:"富山",arr:"19:35",note:"2時間11分",
  detail:{tip:"北陸新幹線の最速達列車。E7/W7系使用。"},
  fromName:"東京",toName:"富山",lineName:"北陸新幹線",
+ fallbackSkip:true,
  fallback:[[35.681,139.767],[36.012,138.367],[36.594,137.529],[36.702,137.213]]},
 {di:0,si:1,type:"local",name:"富山地鉄環状線（路面電車）",from:"富山駅",dep:"19:40",to:"大手モール",arr:"19:48",note:"8分",
  detail:{tip:"富山駅新幹線コンコースから直結。ICカード利用可。"},
@@ -161,6 +162,7 @@ const SEGS = [
 {di:1,si:7,type:"shinkansen",name:"JR北陸新幹線",from:"金沢",dep:"19:55",to:"福井",arr:"20:21",note:"26分",
  detail:{tip:"2024年3月延伸開業の新区間。W7系使用。"},
  fromName:"金沢",toName:"福井",lineName:"北陸新幹線",
+ fallbackSkip:true,
  fallback:[[36.5781,136.6482],[36.3900,136.3710],[36.0621,136.2235]]},
 {di:1,si:8,type:"bus",name:"福井鉄道福武線 普通",from:"福井駅",dep:"20:33",to:"福井城址大名町",arr:"20:38",note:"5分",
  detail:{tip:"ICカード利用可。"},
@@ -169,10 +171,12 @@ const SEGS = [
 {di:2,si:0,type:"shinkansen",name:"JR北陸新幹線 つるぎ19号",from:"福井",dep:"11:41",to:"敦賀",arr:"12:02",note:"21分",
  detail:{tip:"各駅停車タイプ「つるぎ」。敦賀でサンダーバードに乗換。"},
  fromName:"福井",toName:"敦賀",lineName:"北陸新幹線",
+ fallbackSkip:true,
  fallback:[[36.0621,136.2235],[35.6448,136.0765]]},
 {di:2,si:1,type:"tokkyu",name:"特急 サンダーバード20号",from:"敦賀",dep:"12:14",to:"大阪",arr:"13:36",note:"1時間22分（湖西線経由）",
  detail:{tip:"指定席の事前予約推奨。琵琶湖西岸の景色が美しい。"},
  fromName:"敦賀",toName:"大阪",lineName:"湖西線",
+ fallbackSkip:true,
  fallback:[[35.6448,136.0765],[35.501,135.954],[35.2156,135.9098],[34.9863,135.8194],[34.7025,135.496]]},
 {di:2,si:2,type:"bus",name:"Osaka Metro御堂筋線",from:"梅田",dep:"13:36",to:"淀屋橋",arr:"13:39",note:"⚠乗換0分・実質1本後で",warn:true,
  detail:{warn:"実質1本遅らせる必要あり。淀屋橋での1.5時間待機があるため致命傷にはならない。"},
@@ -214,11 +218,13 @@ const SEGS = [
 {di:2,si:13,type:"shinkansen",name:"JR東海道新幹線 のぞみ50号",from:"京都",dep:"19:21",to:"東京",arr:"21:33",note:"一時帰宅・2時間12分",
  detail:{tip:"3日間の余韻を楽しみながら帰宅。"},
  fromName:"京都",toName:"東京",lineName:"東海道新幹線",
+ fallbackSkip:true,
  fallback:[[34.9858,135.7588],[35.1709,136.8815],[35.388,137.154],[35.6812,139.7671]]},
 // ── Day 4 ──
 {di:3,si:0,type:"shinkansen",name:"JR東海道新幹線 のぞみ271号",from:"東京",dep:"17:00",to:"名古屋",arr:"18:39",note:"1時間39分",
  detail:{tip:"N700S系使用。夕方出発でゆっくり準備できる。"},
  fromName:"東京",toName:"名古屋",lineName:"東海道新幹線",
+ fallbackSkip:true,
  fallback:[[35.6812,139.7671],[35.388,137.154],[35.1709,136.8815]]},
 {di:3,si:1,type:"kanko",name:"近鉄名阪特急 ひのとり",from:"近鉄名古屋",dep:"19:00",to:"大和八木",arr:"20:37",note:"プレミアム車両強く推奨・1h37m",
  detail:{tip:"プレミアム車両はバックシェル付き電動リクライニングで日本最高峰。全席コンセント付き。",info:"【お得】近鉄特急券は30分以内乗継で「乗継特急券」として1枚に合算でき割安。名古屋から奈良まで通しで購入すること。"},
@@ -286,10 +292,12 @@ const SEGS = [
 {di:5,si:4,type:"tokkyu",name:"JR紀勢本線 特急 くろしお11号",from:"和歌山",dep:"13:18",to:"紀伊勝浦",arr:"16:16",note:"2時間58分・太平洋沿いの絶景",
  detail:{tip:"進行方向右側（D席）を指定すると熊野灘・太平洋の海岸線が延々と楽しめる。",info:"紀伊勝浦は本まぐろの水揚げ基地。到着後の55分で駅前市場のマグロ丼・寿司を調達するのが最高。"},
  fromName:"和歌山",toName:"紀伊勝浦",lineName:"紀勢本線",
+ fallbackSkip:true,
  fallback:[[34.2322,135.1918],[34.0564,135.1424],[33.7277,135.3648],[33.6853,135.3591],[33.4746,135.7851],[33.7255,135.9879],[33.6281,135.9418]]},
 {di:5,si:5,type:"tokkyu",name:"JR紀勢本線 特急 南紀8号",from:"紀伊勝浦",dep:"17:11",to:"四日市",arr:"20:15",note:"3時間4分・紀伊半島北上",
  detail:{tip:"進行方向右側（A席）を指定すると海岸線が楽しめる。",info:"車内で調達した勝浦マグロ寿司を食べながらの旅が最高。"},
  fromName:"紀伊勝浦",toName:"四日市",lineName:"紀勢本線",
+ fallbackSkip:true,
  fallback:[[33.6281,135.9418],[33.8897,136.0988],[34.0743,136.1902],[34.5777,136.5274],[34.7342,136.5105],[34.963,136.6296]]},
 // ── Day 7 ──
 {di:6,si:0,type:"local",name:"あすなろう鉄道内部線（往路）",from:"あすなろう四日市",dep:"09:23",to:"内部",arr:"09:39",note:"ナローゲージ・16分",
@@ -350,10 +358,12 @@ const SEGS = [
 {di:7,si:0,type:"shinkansen",name:"JR山陽新幹線 さくら753号",from:"姫路",dep:"11:50",to:"岡山",arr:"12:09",note:"19分",
  detail:{tip:"岡山で瀬戸大橋線に乗換え四国へ向かう。"},
  fromName:"姫路",toName:"岡山",lineName:"山陽新幹線",
+ fallbackSkip:true,
  fallback:[[34.8268,134.6909],[34.6661,133.9177]]},
 {di:7,si:1,type:"tokkyu",name:"JR瀬戸大橋線 特急 しおかぜ11号",from:"岡山",dep:"12:35",to:"松山",arr:"15:17",note:"瀬戸大橋を渡り四国へ・2h42m",
  detail:{tip:"瀬戸大橋上（約13分）は両側の瀬戸内海の島々が絶景。",info:"松山到着から17:42まで2時間25分のフリータイム。道後温泉入浴の絶好のチャンス。"},
  fromName:"岡山",toName:"松山",lineName:"予讃線",
+ fallbackSkip:true,
  fallback:[[34.6661,133.9177],[34.4866,133.8281],[34.3266,133.8404],[34.2753,133.7524],[34.0619,132.999],[33.951,132.817],[33.840,132.7511]]},
 {di:7,si:2,type:"bus",name:"伊予鉄道市内線（路面電車）",from:"松山駅前",dep:"17:42",to:"大手町",arr:"17:44",note:"2分",
  detail:{tip:"大手町で郊外線（高浜線）に乗換。"},
@@ -368,6 +378,7 @@ const SEGS = [
 {di:7,si:5,type:"bus",name:"広島電鉄5号線（路面電車）",from:"広島港",dep:"20:03",to:"広島駅",arr:"20:32",note:"29分",
  detail:{tip:"広島港〜広島駅を直通。乗換なし。ICカード利用可。"},
  lineName:"広島電鉄5号線",
+ fromName:"広島港", toName:"広島",
  fallback:[[34.356,132.451],[34.374,132.461],[34.3974,132.4756]]},
 // ── Day 9 ──
 {di:8,si:0,type:"kanko",name:"JR山陽本線 etSETOra",from:"広島",dep:"09:32",to:"福山",arr:"12:53",note:"3時間21分・瀬戸内観光列車",
@@ -377,6 +388,7 @@ const SEGS = [
 {di:8,si:1,type:"shinkansen",name:"JR山陽新幹線 のぞみ25号",from:"福山",dep:"14:04",to:"広島",arr:"14:27",note:"⚠広島到着から在来線まで3分",warn:true,
  detail:{warn:"広島到着（14:27）から在来線（14:30）まで3分。新幹線前方車両に乗り降車後すぐ連絡改札をダッシュ。"},
  fromName:"福山",toName:"広島",lineName:"山陽新幹線",
+ fallbackSkip:true,
  fallback:[[34.4893,133.3614],[34.3974,132.4756]]},
 {di:8,si:2,type:"tokkyu",name:"JR山陽本線 普通",from:"広島",dep:"14:30",to:"宮島口",arr:"14:57",note:"27分",
  detail:{tip:"宮島口からJRフェリーで宮島へ渡れる。"},
@@ -394,6 +406,7 @@ const SEGS = [
 {di:8,si:6,type:"shinkansen",name:"JR山陽新幹線 こだま959号",from:"広島",dep:"19:08",to:"新下関",arr:"20:20",note:"1時間12分",
  detail:{tip:"各駅停車の「こだま」。夕暮れの広島〜山口の車窓。"},
  fromName:"広島",toName:"新下関",lineName:"山陽新幹線",
+ fallbackSkip:true,
  fallback:[[34.3974,132.4756],[34.177,131.816],[34.0057,130.948]]},
 // ── Day 10 ──
 {di:9,si:0,type:"kanko",name:"JR山陰本線 〇〇のはなし",from:"新下関",dep:"09:54",to:"東萩",arr:"12:56",note:"3時間2分・山陰の観光列車",
@@ -410,6 +423,7 @@ const SEGS = [
 {di:9,si:3,type:"shinkansen",name:"JR山陽新幹線 のぞみ43号",from:"新山口",dep:"19:34",to:"博多",arr:"20:09",note:"35分",
  detail:{tip:"乗換まで約1時間半あり。新山口駅2階「プレミアムお土産横丁」で山口名物（外郎・瓦そば）を調達可。"},
  fromName:"新山口",toName:"博多",lineName:"山陽新幹線",
+ fallbackSkip:true,
  fallback:[[34.0933,131.3966],[33.885,130.817],[33.590,130.4206]]},
 // ── Day 11 ──
 {di:10,si:0,type:"tokkyu",name:"JR鹿児島本線 特急 みどり23号",from:"博多",dep:"11:37",to:"有田",arr:"12:54",note:"1時間17分",
@@ -439,6 +453,7 @@ const SEGS = [
 {di:10,si:6,type:"shinkansen",name:"JR西九州新幹線 かもめ55号",from:"武雄温泉",dep:"20:05",to:"長崎",arr:"20:24",note:"対面乗換→新幹線24分",
  detail:{tip:"2022年9月開業。N700S系使用。武雄温泉〜長崎66kmを24分で結ぶ。長崎駅は高架化された新しい駅舎。"},
  fromName:"武雄温泉",toName:"長崎",lineName:"西九州新幹線",
+ fallbackSkip:true,
  fallback:[[33.1962,130.0223],[33.125,130.002],[32.923,129.931],[32.851,130.0416],[32.7531,129.8705]]},
 // ── Day 12 ──
 {di:11,si:0,type:"taxi",name:"タクシー（長崎→瀬戸港）",from:"長崎",dep:"11:12",to:"瀬戸港",arr:"12:24",note:"1時間11分・約15,790円",
@@ -610,55 +625,71 @@ function bfsPath(adj, startId, endId, maxNodes = 5000) {
 }
 
 async function fetchRailCoords(seg) {
-  let [S, W, N, E] = seg.bbox || [null, null, null, null];
-  
-  // bboxが未定義の場合、fallback座標から自動計算（周囲に約5kmの余白を持たせる）
-  if (S === null && seg.fallback && seg.fallback.length > 0) {
-    let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+  // fallbackSkip=true の区間はOSMをスキップして直線描画
+  if (seg.fallbackSkip) return null;
+
+  // bboxをfallbackから自動計算（pad=0.05度≒5km）
+  let S, W, N, E;
+  if (seg.bbox) {
+    [S, W, N, E] = seg.bbox;
+  } else if (seg.fallback?.length > 0) {
+    let minLat=90, maxLat=-90, minLon=180, maxLon=-180;
     seg.fallback.forEach(c => {
-      if(c[0] < minLat) minLat = c[0];
-      if(c[0] > maxLat) maxLat = c[0];
-      if(c[1] < minLon) minLon = c[1];
-      if(c[1] > maxLon) maxLon = c[1];
+      if(c[0]<minLat) minLat=c[0]; if(c[0]>maxLat) maxLat=c[0];
+      if(c[1]<minLon) minLon=c[1]; if(c[1]>maxLon) maxLon=c[1];
     });
-    const pad = 0.05; 
-    S = minLat - pad; N = maxLat + pad;
-    W = minLon - pad; E = maxLon + pad;
-  }
-  
-  if (S === null) return null;
+    const pad=0.05;
+    S=minLat-pad; N=maxLat+pad; W=minLon-pad; E=maxLon+pad;
+  } else return null;
 
   const lineName = seg.lineName;
-
-  // ① relation名で路線のgeometryを取得（way全取得より遥かに軽量）
-  const relQuery = `[out:json][timeout:60];
-relation["route"~"train|tram|light_rail"]["name"~"${lineName}"](${S},${W},${N},${E});
-(._;>;);
-out geom;`;
-
-  const data = await fetchOverpass(relQuery).catch(() => null);
-  if (!data?.elements) return null;
-
-  const wayEls = data.elements.filter(e => e.type === "way" && e.geometry?.length >= 2);
-  if (wayEls.length === 0) return null;
-
-  // fallback座標から始終点を決定
   const fromCoord = seg.fallback?.[0] ?? null;
-  const toCoord   = seg.fallback?.[seg.fallback.length - 1] ?? null;
+  const toCoord   = seg.fallback?.[seg.fallback.length-1] ?? null;
   if (!fromCoord || !toCoord) return null;
 
-  // ② グラフ構築・BFS
-  const {nodes, adj} = buildSyntheticGraph(wayEls);
-  if (Object.keys(nodes).length === 0) return null;
+  // ① 始点・終点の駅ノードを取得（BFS精度向上）
+  const stQuery = `[out:json][timeout:15];
+(node["railway"~"station|halt|tram_stop"]["name"="${seg.fromName}"](${S},${W},${N},${E});
+ node["railway"~"station|halt|tram_stop"]["name"="${seg.toName}"](${S},${W},${N},${E}););
+out body;`;
 
-  const startId = nearestNode(nodes, fromCoord);
-  const endId   = nearestNode(nodes, toCoord);
+  // ② relationからwayのgeometryのみ取得（(._;>;)を廃止→大幅軽量化）
+  const relQuery = `[out:json][timeout:30];
+relation["route"~"train|tram|light_rail"]["name"~"${lineName}"](${S},${W},${N},${E});
+way(r)["railway"~"rail|tram|light_rail"];
+out geom;`;
+
+  // 並列取得
+  const [stData, wayData] = await Promise.all([
+    seg.fromName && seg.toName ? fetchOverpass(stQuery).catch(()=>null) : Promise.resolve(null),
+    fetchOverpass(relQuery).catch(()=>null),
+  ]);
+
+  if (!wayData?.elements) return null;
+  const wayEls = wayData.elements.filter(e => e.type==="way" && e.geometry?.length>=2);
+  if (wayEls.length === 0) return null;
+
+  // 駅ノード座標を特定（取得できた場合はfallbackより優先）
+  let fCoord = fromCoord, tCoord = toCoord;
+  if (stData?.elements) {
+    const fn = stData.elements.find(e=>e.type==="node"&&e.tags?.name===seg.fromName);
+    const tn = stData.elements.find(e=>e.type==="node"&&e.tags?.name===seg.toName);
+    if (fn) fCoord=[fn.lat,fn.lon];
+    if (tn) tCoord=[tn.lat,tn.lon];
+  }
+
+  // ③ グラフ構築・BFS
+  const {nodes, adj} = buildSyntheticGraph(wayEls);
+  if (Object.keys(nodes).length===0) return null;
+
+  const startId = nearestNode(nodes, fCoord);
+  const endId   = nearestNode(nodes, tCoord);
   if (!startId || !endId) return null;
 
   const path = bfsPath(adj, startId, endId);
-  if (!path || path.length < 2) return null;
+  if (!path || path.length<2) return null;
 
-  return path.map(id => nodes[id]).filter(Boolean);
+  return path.map(id=>nodes[id]).filter(Boolean);
 }
 
 // =====================================================================
@@ -812,7 +843,7 @@ async function loadOneSeg(seg) {
   putFallback(seg);
 
 // 2. OSMクエリがある区間のみ精細化
-  if (seg.lineName) { // ← && seg.bbox を削除
+  if (seg.lineName && !seg.fallbackSkip) {
     let coords = null;
     try {
       coords = await fetchRailCoords(seg);
