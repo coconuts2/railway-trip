@@ -610,7 +610,24 @@ function bfsPath(adj, startId, endId, maxNodes = 5000) {
 }
 
 async function fetchRailCoords(seg) {
-  const [S,W,N,E] = seg.bbox;
+  let [S, W, N, E] = seg.bbox || [null, null, null, null];
+  
+  // bboxが未定義の場合、fallback座標から自動計算（周囲に約5kmの余白を持たせる）
+  if (S === null && seg.fallback && seg.fallback.length > 0) {
+    let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    seg.fallback.forEach(c => {
+      if(c[0] < minLat) minLat = c[0];
+      if(c[0] > maxLat) maxLat = c[0];
+      if(c[1] < minLon) minLon = c[1];
+      if(c[1] > maxLon) maxLon = c[1];
+    });
+    const pad = 0.05; 
+    S = minLat - pad; N = maxLat + pad;
+    W = minLon - pad; E = maxLon + pad;
+  }
+  
+  if (S === null) return null;
+
   const lineName = seg.lineName;
 
   // ① relation名で路線のgeometryを取得（way全取得より遥かに軽量）
@@ -794,8 +811,8 @@ async function loadOneSeg(seg) {
   // 1. フォールバックを即座に描画
   putFallback(seg);
 
-  // 2. OSMクエリがある区間のみ精細化
-  if (seg.lineName && seg.bbox) {
+// 2. OSMクエリがある区間のみ精細化
+  if (seg.lineName) { // ← && seg.bbox を削除
     let coords = null;
     try {
       coords = await fetchRailCoords(seg);
