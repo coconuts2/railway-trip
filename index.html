@@ -88,8 +88,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 // 定数
 // =====================================================================
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7日間キャッシュ
-const CONCURRENCY = 1; // 完全シリアル（レート制限対策）
-const REQUEST_INTERVAL = 3000; // リクエスト間隔 3秒
+const CONCURRENCY = 3; // 並列数（BFS廃止で負荷減のため増加）
+const REQUEST_INTERVAL = 1000; // リクエスト間隔 1秒
 const RETRY_WAIT = 30000; // 429時の待機時間 30秒
 const MAX_RETRY = 3; // 最大リトライ回数
 const ENDPOINTS = [
@@ -559,11 +559,16 @@ async function fetchOverpass(query) {
   return null;
 }
 
-// 完全シリアル実行（同時実行数=1）
+// 同時実行数制限付き並列実行
 async function runWithConcurrency(tasks, limit) {
+  const executing = new Set();
   for (const task of tasks) {
-    try { await task(); } catch(e) {}
+    const p = (async () => { try { await task(); } catch(e) {} })();
+    p.finally(() => executing.delete(p));
+    executing.add(p);
+    if (executing.size >= limit) await Promise.race(executing);
   }
+  await Promise.allSettled([...executing]);
 }
 
 // =====================================================================
@@ -575,53 +580,68 @@ function haversine(a, b) {
   return R * 2 * Math.asin(Math.sqrt(x));
 }
 
-function buildSyntheticGraph(wayElements) {
-  const nodes = {}, adj = {};
-  let id = 1e9;
-  for (const el of wayElements) {
-    if (el.type !== "way") continue;
-    const geom = el.geometry;
-    if (!geom || geom.length < 2) continue;
-    const ids = geom.map(g => {
-      const nid = id++;
-      nodes[nid] = [g.lat, g.lon];
-      return nid;
-    });
-    for (let i = 0; i < ids.length - 1; i++) {
-      const a = ids[i], b = ids[i+1];
-      (adj[a] = adj[a]||[]).push(b);
-      (adj[b] = adj[b]||[]).push(a);
-    }
-  }
-  return {nodes, adj};
-}
+// wayを始点→終点の順に連結して一本のポリラインにする（BFS不要・高速）
+// 各wayは数メートル間隔の点列。線路は基本1本道なので、端点同士を貪欲に連結する。
+function stitchWays(wayElements, startCoord, endCoord) {
+  // 各wayのgeometryを [lat,lon][] に変換
+  let segments = wayElements
+    .filter(el => el.type === "way" && el.geometry && el.geometry.length >= 2)
+    .map(el => el.geometry.map(g => [g.lat, g.lon]));
+  if (segments.length === 0) return null;
 
-function nearestNode(nodes, coord) {
-  let bestId = null, bestD = Infinity;
-  for (const [id, pos] of Object.entries(nodes)) {
-    const d = haversine(pos, coord);
-    if (d < bestD) { bestD = d; bestId = id; }
-  }
-  return bestId;
-}
+  // ① 始点に最も近い端点を持つsegmentを起点にする
+  let bestIdx = 0, bestDist = Infinity, bestReversed = false;
+  segments.forEach((seg, i) => {
+    const dStart = haversine(startCoord, seg[0]);
+    const dEnd   = haversine(startCoord, seg[seg.length - 1]);
+    if (dStart < bestDist) { bestDist = dStart; bestIdx = i; bestReversed = false; }
+    if (dEnd   < bestDist) { bestDist = dEnd;   bestIdx = i; bestReversed = true; }
+  });
 
-function bfsPath(adj, startId, endId, maxNodes = 5000) {
-  if (startId === endId) return [startId];
-  const visited = new Set([String(startId)]);
-  const queue = [[startId, [startId]]];
-  let count = 0;
-  while (queue.length > 0 && count++ < maxNodes) {
-    const [cur, path] = queue.shift();
-    for (const next of (adj[cur]||[])) {
-      const nk = String(next);
-      if (nk === String(endId)) return [...path, next];
-      if (!visited.has(nk)) {
-        visited.add(nk);
-        queue.push([next, [...path, next]]);
-      }
+  const used = new Array(segments.length).fill(false);
+  used[bestIdx] = true;
+  let chain = bestReversed ? [...segments[bestIdx]].reverse() : [...segments[bestIdx]];
+
+  // ② 末端に最も近い未使用segmentを貪欲に連結
+  while (true) {
+    const tail = chain[chain.length - 1];
+    let nextIdx = -1, nextDist = Infinity, nextReversed = false;
+    for (let i = 0; i < segments.length; i++) {
+      if (used[i]) continue;
+      const seg = segments[i];
+      const dHead = haversine(tail, seg[0]);
+      const dTail = haversine(tail, seg[seg.length - 1]);
+      if (dHead < nextDist) { nextDist = dHead; nextIdx = i; nextReversed = false; }
+      if (dTail < nextDist) { nextDist = dTail; nextIdx = i; nextReversed = true; }
     }
+    // 次のwayが離れすぎている場合（500m超）は連結終了
+    if (nextIdx < 0 || nextDist > 500) break;
+    used[nextIdx] = true;
+    const seg = nextReversed ? [...segments[nextIdx]].reverse() : [...segments[nextIdx]];
+    chain.push(...seg);
   }
-  return null;
+
+  // ③ 終点に最も近い点で切り詰める（乗る区間だけにする）
+  let endCutIdx = chain.length - 1, endCutDist = Infinity;
+  chain.forEach((pt, i) => {
+    const d = haversine(endCoord, pt);
+    if (d < endCutDist) { endCutDist = d; endCutIdx = i; }
+  });
+  // 始点に最も近い点も探して切り詰め
+  let startCutIdx = 0, startCutDist = Infinity;
+  chain.forEach((pt, i) => {
+    const d = haversine(startCoord, pt);
+    if (d < startCutDist) { startCutDist = d; startCutIdx = i; }
+  });
+
+  // 始点〜終点の範囲だけを抽出
+  let lo = Math.min(startCutIdx, endCutIdx);
+  let hi = Math.max(startCutIdx, endCutIdx);
+  let result = chain.slice(lo, hi + 1);
+  // 始点が後ろにある場合は反転して「出発→到着」の向きに揃える
+  if (startCutIdx > endCutIdx) result.reverse();
+
+  return result.length >= 2 ? result : chain;
 }
 
 async function fetchRailCoords(seg) {
@@ -647,19 +667,18 @@ async function fetchRailCoords(seg) {
   const toCoord   = seg.fallback?.[seg.fallback.length-1] ?? null;
   if (!fromCoord || !toCoord) return null;
 
-  // ① 始点・終点の駅ノードを取得（BFS精度向上）
+  // 始点・終点の駅ノードを取得（連結アルゴリズムの始終点精度を向上）
   const stQuery = `[out:json][timeout:15];
 (node["railway"~"station|halt|tram_stop"]["name"="${seg.fromName}"](${S},${W},${N},${E});
  node["railway"~"station|halt|tram_stop"]["name"="${seg.toName}"](${S},${W},${N},${E}););
 out body;`;
 
-  // ② relationからwayのgeometryのみ取得（(._;>;)を廃止→大幅軽量化）
+  // relationからwayのgeometryのみ取得（軽量）
   const relQuery = `[out:json][timeout:30];
 relation["route"~"train|tram|light_rail"]["name"~"${lineName}"](${S},${W},${N},${E});
 way(r)["railway"~"rail|tram|light_rail"];
 out geom;`;
 
-  // 並列取得
   const [stData, wayData] = await Promise.all([
     seg.fromName && seg.toName ? fetchOverpass(stQuery).catch(()=>null) : Promise.resolve(null),
     fetchOverpass(relQuery).catch(()=>null),
@@ -669,7 +688,7 @@ out geom;`;
   const wayEls = wayData.elements.filter(e => e.type==="way" && e.geometry?.length>=2);
   if (wayEls.length === 0) return null;
 
-  // 駅ノード座標を特定（取得できた場合はfallbackより優先）
+  // 駅ノード座標を特定（取得できればfallbackより優先）
   let fCoord = fromCoord, tCoord = toCoord;
   if (stData?.elements) {
     const fn = stData.elements.find(e=>e.type==="node"&&e.tags?.name===seg.fromName);
@@ -678,18 +697,9 @@ out geom;`;
     if (tn) tCoord=[tn.lat,tn.lon];
   }
 
-  // ③ グラフ構築・BFS
-  const {nodes, adj} = buildSyntheticGraph(wayEls);
-  if (Object.keys(nodes).length===0) return null;
-
-  const startId = nearestNode(nodes, fCoord);
-  const endId   = nearestNode(nodes, tCoord);
-  if (!startId || !endId) return null;
-
-  const path = bfsPath(adj, startId, endId);
-  if (!path || path.length<2) return null;
-
-  return path.map(id=>nodes[id]).filter(Boolean);
+  // BFSの代わりに線形連結アルゴリズムで一本につなぐ（高速）
+  const coords = stitchWays(wayEls, fCoord, tCoord);
+  return (coords && coords.length>=2) ? coords : null;
 }
 
 // =====================================================================
