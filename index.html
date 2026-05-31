@@ -799,6 +799,9 @@ const total=SEGS.length;
 document.getElementById('progress-label').textContent=`0/${total}`;
 
 async function loadOneSeg(seg) {
+  // 現在取得中の区間名を表示
+  document.getElementById('status-text').textContent = `取得中: ${seg.name}`;
+
   // 1. フォールバックを即座に描画
   putFallback(seg);
 
@@ -828,7 +831,9 @@ async function loadOneSeg(seg) {
       try { map.fitBounds(L.featureGroup(allPls).getBounds(), {padding:[20,20]}); } catch(e){}
     }
   } else {
-    document.getElementById('status-text').textContent = `取得中... (${done}/${total})`;
+    const next = SEGS[done];
+    const detail = next ? `　次: ${next.name}` : '';
+    document.getElementById('status-text').textContent = `取得中... ${detail}`;
   }
 }
 
