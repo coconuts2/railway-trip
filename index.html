@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -88,8 +89,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 // 定数
 // =====================================================================
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7日間キャッシュ
-const CONCURRENCY = 3; // 並列数（BFS廃止で負荷減のため増加）
-const REQUEST_INTERVAL = 1000; // リクエスト間隔 1秒
+const CONCURRENCY = 1; // シリアル実行（429・フリーズ回避）
+const REQUEST_INTERVAL = 2000; // リクエスト間隔 2秒
 const RETRY_WAIT = 30000; // 429時の待機時間 30秒
 const MAX_RETRY = 3; // 最大リトライ回数
 const ENDPOINTS = [
@@ -559,16 +560,11 @@ async function fetchOverpass(query) {
   return null;
 }
 
-// 同時実行数制限付き並列実行
+// 完全シリアル実行（同時実行数=1・429回避）
 async function runWithConcurrency(tasks, limit) {
-  const executing = new Set();
   for (const task of tasks) {
-    const p = (async () => { try { await task(); } catch(e) {} })();
-    p.finally(() => executing.delete(p));
-    executing.add(p);
-    if (executing.size >= limit) await Promise.race(executing);
+    try { await task(); } catch(e) {}
   }
-  await Promise.allSettled([...executing]);
 }
 
 // =====================================================================
@@ -667,38 +663,20 @@ async function fetchRailCoords(seg) {
   const toCoord   = seg.fallback?.[seg.fallback.length-1] ?? null;
   if (!fromCoord || !toCoord) return null;
 
-  // 始点・終点の駅ノードを取得（連結アルゴリズムの始終点精度を向上）
-  const stQuery = `[out:json][timeout:15];
-(node["railway"~"station|halt|tram_stop"]["name"="${seg.fromName}"](${S},${W},${N},${E});
- node["railway"~"station|halt|tram_stop"]["name"="${seg.toName}"](${S},${W},${N},${E}););
-out body;`;
-
-  // relationからwayのgeometryのみ取得（軽量）
+  // relationからwayのgeometryのみ取得（軽量・1区間1リクエスト）
   const relQuery = `[out:json][timeout:30];
 relation["route"~"train|tram|light_rail"]["name"~"${lineName}"](${S},${W},${N},${E});
 way(r)["railway"~"rail|tram|light_rail"];
 out geom;`;
 
-  const [stData, wayData] = await Promise.all([
-    seg.fromName && seg.toName ? fetchOverpass(stQuery).catch(()=>null) : Promise.resolve(null),
-    fetchOverpass(relQuery).catch(()=>null),
-  ]);
-
+  const wayData = await fetchOverpass(relQuery).catch(()=>null);
   if (!wayData?.elements) return null;
   const wayEls = wayData.elements.filter(e => e.type==="way" && e.geometry?.length>=2);
   if (wayEls.length === 0) return null;
 
-  // 駅ノード座標を特定（取得できればfallbackより優先）
-  let fCoord = fromCoord, tCoord = toCoord;
-  if (stData?.elements) {
-    const fn = stData.elements.find(e=>e.type==="node"&&e.tags?.name===seg.fromName);
-    const tn = stData.elements.find(e=>e.type==="node"&&e.tags?.name===seg.toName);
-    if (fn) fCoord=[fn.lat,fn.lon];
-    if (tn) tCoord=[tn.lat,tn.lon];
-  }
-
+  // fallback座標（駅座標）をそのまま始終点に使う（上書きしない）
   // BFSの代わりに線形連結アルゴリズムで一本につなぐ（高速）
-  const coords = stitchWays(wayEls, fCoord, tCoord);
+  const coords = stitchWays(wayEls, fromCoord, toCoord);
   return (coords && coords.length>=2) ? coords : null;
 }
 
