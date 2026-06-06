@@ -456,7 +456,7 @@ function stitchWays(ways, startCoord, endCoord, log) {
   independentChains = independentChains.filter(ch => ch.chainId !== currentChainObj.chainId);
 
   let extended = true;
-  const REL_CONNECT_THRESHOLD = 500.0; // ターミナル駅構内の隙間を許容する500m
+  const REL_CONNECT_THRESHOLD = 500.0; // 駅構内ギャップ許容
 
   while (extended && independentChains.length > 0) {
     extended = false;
@@ -609,12 +609,10 @@ async function fetchRailCoords(seg, log) {
     return null;
   }
 
-  // クレンジングを廃止し、入力された路線名をそのままリスペクトしてログ出力
   log.push({t:'info', msg: `【API検索開始】対象路線名: [${lineQuery}]`});
 
-  // route=train (運行系統) または route=railway (インフラ路線名) のいずれかで、
-  // 完全一致、またはその名前を含むリレーションを広域に捕獲する防弾クエリ
-  const url = `https://overpass-api.de/api/interpreter?data=[out:json][timeout:30];(relation["route"="train"]["name"~"${lineQuery}"];relation["route"="railway"]["name"~"${lineQuery}"];);out geom;`;
+  // 【ChatGPTの指摘を完全反映】末尾に (._;>;); を追加し、Relationに属するWayとNodeを強制展開して全取得する
+  const url = `https://overpass-api.de/api/interpreter?data=[out:json][timeout:30];(relation["route"="train"]["name"~"${lineQuery}"];relation["route"="railway"]["name"~"${lineQuery}"];);(._;>;);out geom;`;
   
   let res;
   try {
@@ -635,18 +633,21 @@ async function fetchRailCoords(seg, log) {
 
   const data = await res.json();
   if (!data || !data.elements || data.elements.length === 0) {
-    log.push({t:'warn', msg: `❌ Overpassから該当するデータが返されませんでした(0件)。路線名「${lineQuery}」がOSMのタグと一致していない可能性があります。`});
+    log.push({t:'warn', msg: `❌ Overpassから該当するデータが返されませんでした(0件)。`});
     return null;
   }
 
   const elements = data.elements;
   const rels = elements.filter(el => el.type === 'relation');
+  const allWays = elements.filter(el => el.type === 'way'); // 全Way要素をフィルタ抽出
+
   if (rels.length === 0) {
-    log.push({t:'warn', msg: `⚠️ Way要素は ${elements.filter(e=>e.type==='way').length} 件取得できましたが、それらを束ねるRelationが0件です。`});
+    log.push({t:'warn', msg: `⚠️ 該当するRelationが0件です。`});
     return null;
   }
 
-  log.push({t:'info', msg: `🎉 取得成功 -> Relation総数: ${rels.length} 件 / Way総数: ${elements.filter(e=>e.type==='way').length} 件`});
+  // 【ChatGPT要求のログ】Relation数とWay数を正確に画面に出力
+  log.push({t:'info', msg: `🎉 取得成功 -> Relation総数: ${rels.length} 件 / Way総数: ${allWays.length} 件`});
 
   // Relation名の内訳をログに全出力
   const names = rels.map(r => `${r.tags?.name || '未命名'}(ID:${r.id}, route=${r.tags?.route})`).join(' / ');
@@ -665,11 +666,12 @@ async function fetchRailCoords(seg, log) {
   });
 
   const ways = [];
-  elements.forEach(el => {
-    if (el.type === 'way' && el.geometry) {
+  allWays.forEach(el => {
+    if (el.geometry) {
       let assignedRelId = wayToRel[String(el.id)];
       if (!assignedRelId) {
-        assignedRelId = rels[0] ? String(rels[0].id) : "unknown_line";
+        // もし関係するWayなのに辞書にない場合は、第1Relationに仮所属させる
+        assignedRelId = String(rels[0].id);
       }
 
       ways.push({
