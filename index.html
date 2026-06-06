@@ -456,7 +456,7 @@ async function strategyByLineName(seg, bbox, log){
   // 1行目: relationのタグを出力（路線名取得用）
   // 2行目以降: relationに属するwayのgeometryを出力（描画用）
   const q=`[out:json][timeout:30];
-relation["route"~"train|tram|light_rail|monorail|subway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
+relation["route"~"train|tram|light_rail|monorail|subway|railway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
 way(r)["railway"~"rail|tram|light_rail|monorail|subway"];
 out geom;
 relation["route"~"train|tram|light_rail|monorail|subway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
