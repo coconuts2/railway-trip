@@ -369,8 +369,8 @@ function stitchWays(wayElements, startCoord, endCoord, gap=STITCH_GAP){
 // 1. 富山駅〜高岡駅の「直線距離」をあらかじめ計算しておく
 const totalStationDist = haversine(startCoord, endCoord);
 
-// 2. できた鎖（chain）の中から、乗車駅・降車駅の「どちらからも遠すぎる点」を排除する
-let result = chain.filter(pt => {
+// 2. できた鎖（chain）の中から、乗車駅・降車駅の「どちらからも遠すぎる点（はみ出し）」を排除する
+let filteredChain = chain.filter(pt => {
   const dStart = haversine(startCoord, pt); // 乗車駅（富山）からの距離
   const dEnd = haversine(endCoord, pt);     // 降車駅（高岡）からの距離
   
@@ -378,18 +378,25 @@ let result = chain.filter(pt => {
   const margin = 0.5; 
   
   // 点が「富山駅〜高岡駅の範囲内」に収まっているか判定
-  // 富山からの距離、または高岡からの距離が、駅間距離より明らかに大きい場合は「はみ出し」とみなす
   return (dStart <= totalStationDist + margin) && (dEnd <= totalStationDist + margin);
 });
 
-// 3. 地理的な並び順（乗車駅 → 降車駅）になるように配列の方向を整える
-if (result.length >= 2) {
-  const startDist = haversine(startCoord, result[0]);
-  const endDist = haversine(startCoord, result[result.length - 1]);
+// 3. 元のログ出力ロジックがクラッシュしないよう、sIdx と eIdx を再定義する
+let sIdx = 0;
+let eIdx = filteredChain.length >= 1 ? filteredChain.length - 1 : 0;
+
+// 4. 地理的な並び順（乗車駅 → 降車駅）になるように配列の方向を整える
+if (filteredChain.length >= 2) {
+  const startDist = haversine(startCoord, filteredChain[sIdx]);
+  const endDist = haversine(startCoord, filteredChain[eIdx]);
   if (startDist > endDist) {
-    result.reverse(); // 逆向きに繋がっていたら反転させる
+    filteredChain.reverse(); // 逆向きに繋がっていたら反転させる
   }
 }
+
+// 5. 最終的な描画用結果に代入し、元のchain変数もログ用に上書きする
+let result = filteredChain;
+chain = filteredChain;
   if(sIdx>eIdx) result.reverse();
   return {coords: result.length>=2?result:chain, startGap:sD, endGap:eD, usedWays:used.filter(Boolean).length, totalWays:segments.length};
 }
