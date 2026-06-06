@@ -171,8 +171,8 @@ const MAX_RETRY = 3;
 const STITCH_GAP = 1000;       // way連結の最大ギャップ(m)
 const NEAR_STATION = 800;      // 端点が駅とみなせる距離(m)
 const ENDPOINTS = [
-  "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
 ];
 
 const T = {
@@ -384,6 +384,8 @@ function stitchWays(wayElements, startCoord, endCoord, gap=STITCH_GAP){
     used[ni]=true;
     const c = nrev ? [...segments[ni].coords].reverse() : [...segments[ni].coords];
     chain.unshift(...c);
+    // 始点に十分近づいたら打ち切り
+    if(haversine(chain[0], startCoord) < NEAR_STATION) break;
   }
 
   // 始点・終点に最も近い点のインデックスを探す
@@ -459,7 +461,7 @@ async function strategyByLineName(seg, bbox, log){
 relation["route"~"train|tram|light_rail|monorail|subway|railway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
 way(r)["railway"~"rail|tram|light_rail|monorail|subway"];
 out geom;
-relation["route"~"train|tram|light_rail|monorail|subway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
+relation["route"~"train|tram|light_rail|monorail|subway|railway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
 out tags;`;
   const t0=performance.now();
   const {data, cached, endpoint} = await fetchOverpass(q, log);
@@ -555,18 +557,11 @@ async function fetchRailCoords(seg, log){
     return null;
   }
 
-  // 端点の場所情報を取得
+  // 端点情報をログに出力（APIを追加で叩かず座標のみ記録）
   const ep1=stitched.coords[0], ep2=stitched.coords[stitched.coords.length-1];
   log.push({t:'info', msg:`描画線の端点1: [${ep1[0].toFixed(4)}, ${ep1[1].toFixed(4)}]`});
   log.push({t:'info', msg:`描画線の端点2: [${ep2[0].toFixed(4)}, ${ep2[1].toFixed(4)}]`});
-  const [st1, st2] = await Promise.all([
-    identifyEndpoint(ep1, bbox, log),
-    identifyEndpoint(ep2, bbox, log),
-  ]);
-  if(st1) log.push({t: st1.far?'warn':'ok', msg:`　端点1の最寄駅: ${st1.name}${st1.line?'('+st1.line+')':''} (${st1.dist.toFixed(0)}m)${st1.far?' ※離れている':''}`});
-  else log.push({t:'warn', msg:`　端点1付近に駅情報なし`});
-  if(st2) log.push({t: st2.far?'warn':'ok', msg:`　端点2の最寄駅: ${st2.name}${st2.line?'('+st2.line+')':''} (${st2.dist.toFixed(0)}m)${st2.far?' ※離れている':''}`});
-  else log.push({t:'warn', msg:`　端点2付近に駅情報なし`});
+  log.push({t:'info', msg:`　端点1→乗車駅距離: ${stitched.startGap.toFixed(0)}m / 端点2→降車駅距離: ${stitched.endGap.toFixed(0)}m`});
 
   return stitched.coords;
 }
