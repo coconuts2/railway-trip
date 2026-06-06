@@ -470,10 +470,12 @@ out tags;`;
   }
   // 取得できた路線名を列挙（relationのtagsから）
   const relNames=[...new Set(data.elements.filter(e=>e.type==='relation').map(e=>e.tags?.name).filter(Boolean))];
+  const relIds = data.elements.filter(e => e.type === 'relation').map(e => e.id);
   const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
   log.push({t:'ok', msg:`戦略A: ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から取得 (${dt}秒)`});
   log.push({t:'info', msg:`　検索した路線名: ${lineNames.join(' / ')}`});
   log.push({t:'info', msg:`　OSMで見つかった路線(${relNames.length}): ${relNames.join(' / ')||'(該当relationなし)'}`});
+  log.push({t:'info', msg:`　relationID: ${relIds.join(', ') || 'なし'}`});
   log.push({t:'info', msg:`　way数: ${wayEls.length}`});
   if(wayEls.length===0) return null;
   return {wayEls, relNames};
