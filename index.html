@@ -366,6 +366,8 @@ function stitchWays(wayElements, startCoord, endCoord, gap=STITCH_GAP){
     used[ni]=true;
     const c = nrev ? [...segments[ni].coords].reverse() : [...segments[ni].coords];
     chain.push(...c);
+    // ★ここを追加: 終点に十分近づいたら打ち切り
+    if(haversine(chain[chain.length-1], endCoord) < NEAR_STATION) break;
   }
   // 起点の手前方向にも伸ばす（後方向連結）
   while(true){
