@@ -339,15 +339,26 @@ function stitchWays(ways, startCoord, endCoord, log) {
   log.push({t:'info', msg: `--- 連結アルゴリズム開始 (入力Way数: ${ways.length}) ---`});
 
   // ==========================================
-  // STEP 1: リレーション(または路線名・系統名)ごとにWayを安全に分離
+  // STEP 1: リレーションごとにWayを安全に分離（undefined対策を徹底強化）
   // ==========================================
   const groups = {};
   ways.forEach(w => {
     if (!w) return;
-    const relId = w.relId || (w.tags && w.tags.name) || "unknown_line";
-    if (!groups[relId]) groups[relId] = [];
     
-    // 点配列の抽出（オブジェクト構造の差異を100%吸収する）
+    // w.relId が undefined だった場合の安全フォールバック
+    let relId = w.relId;
+    if (!relId && w.tags && w.tags.name) {
+      relId = w.tags.name;
+    }
+    if (!relId) {
+      relId = "unknown_relation"; // 絶対に undefined にしない
+    }
+    
+    if (!groups[relId]) {
+      groups[relId] = [];
+    }
+    
+    // 点配列の抽出（オブジェクト構造の差異を100%吸収）
     let pts = null;
     if (Array.isArray(w)) {
       pts = w;
@@ -362,7 +373,9 @@ function stitchWays(ways, startCoord, endCoord, log) {
     }
   });
 
-  const relIds = Object.keys(groups).filter(id => groups[id].length > 0);
+  // 空のグループを排除して有効なキー一覧を作成
+  const relIds = Object.keys(groups).filter(id => groups[id] && groups[id].length > 0);
+  
   if (relIds.length === 0) {
     log.push({t:'warn', msg: '有効な線路データ(Points)が検出されませんでした。'});
     return [];
