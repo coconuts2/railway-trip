@@ -334,53 +334,70 @@ function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 // 始点・終点に最も近い点の間だけをスライスする。
 // これによりジグザグや巻き込み（途中で別方向に伸びた支線）を排除する。
 function stitchWays(ways, startCoord, endCoord, log) {
-  if (!ways || ways.length === 0) return [];
+  if (!ways || !Array.isArray(ways) || ways.length === 0) return [];
 
   log.push({t:'info', msg: `--- 連結アルゴリズム開始 (入力Way数: ${ways.length}) ---`});
 
   // ==========================================
-  // STEP 1: リレーション(または路線名・系統名)ごとにWayをグルーピング
+  // STEP 1: リレーション(または路線名・系統名)ごとにWayを安全に分離
   // ==========================================
   const groups = {};
   ways.forEach(w => {
-    // リレーションIDがあればそれをキーに、なければnameや固定値を使う
+    if (!w) return;
     const relId = w.relId || (w.tags && w.tags.name) || "unknown_line";
     if (!groups[relId]) groups[relId] = [];
-    // points配列が存在することを確認
-    const pts = w.points ? w.points : w;
+    
+    // 点配列の抽出（オブジェクト構造の差異を100%吸収する）
+    let pts = null;
+    if (Array.isArray(w)) {
+      pts = w;
+    } else if (w.points && Array.isArray(w.points)) {
+      pts = w.points;
+    } else if (w.nodes && Array.isArray(w.nodes)) {
+      pts = w.nodes;
+    }
+
     if (pts && pts.length > 0) {
-      groups[relId].push(pts);
+      groups[relId].push(pts.slice()); // 参照を切るためにコピー
     }
   });
 
-  const relIds = Object.keys(groups);
-  log.push({t:'info', msg: `検出された独立リレーション数: ${relIds.length} (${relIds.join(', ')})`});
+  const relIds = Object.keys(groups).filter(id => groups[id].length > 0);
+  if (relIds.length === 0) {
+    log.push({t:'warn', msg: '有効な線路データ(Points)が検出されませんでした。'});
+    return [];
+  }
+  log.push({t:'info', msg: `独立リレーション数: ${relIds.length} (${relIds.join(', ')})`});
 
   // ==========================================
-  // STEP 2: 各リレーション(グループ)内で、それぞれ「独立した1本道(独立チェーン)」を作る
+  // STEP 2: 各リレーション内で独立チェーンを作成
   // ==========================================
-  const independentChains = [];
+  let independentChains = [];
   
   relIds.forEach(relId => {
-    let pool = groups[relId].map(p => p.slice());
+    let pool = [];
+    groups[relId].forEach(pts => {
+      if (Array.isArray(pts) && pts.length > 0) pool.push(pts);
+    });
+
     if (pool.length === 0) return;
 
-    // 最初の1本を取り出してベースにする
-    let chain = pool.shift();
+    let chain = pool.shift().slice();
     let progress = true;
 
-    // グループ内だけで数珠繋ぎ連結（Greedy法）を行う
     while (progress && pool.length > 0) {
       progress = false;
       const head = chain[0];
       const tail = chain[chain.length - 1];
+      if (!head || !tail) break;
 
       for (let i = 0; i < pool.length; i++) {
         const p = pool[i];
+        if (!p || p.length === 0) continue;
         const pHead = p[0];
         const pTail = p[p.length - 1];
 
-        // 末尾(tail)への接続判定
+        // 末尾(tail)への接続
         if (haversine(tail, pHead) < 0.001) {
           chain = chain.concat(p.slice(1));
           pool.splice(i, 1); progress = true; break;
@@ -389,7 +406,7 @@ function stitchWays(ways, startCoord, endCoord, log) {
           chain = chain.concat(p.slice().reverse().slice(1));
           pool.splice(i, 1); progress = true; break;
         }
-        // 先頭(head)への接続判定
+        // 先頭(head)への接続
         if (haversine(head, pTail) < 0.001) {
           chain = p.slice().concat(chain.slice(1));
           pool.splice(i, 1); progress = true; break;
@@ -406,79 +423,88 @@ function stitchWays(ways, startCoord, endCoord, log) {
     }
   });
 
-  // ==========================================
-  // STEP 3: 独立チェーン同士をバトンタッチ結合する（和集合の作成）
-  // ==========================================
   if (independentChains.length === 0) return [];
 
-  // 乗車駅（startCoord）に最も近い端点を持つチェーンを「主軸（スタート）」に選ぶ
+  // ==========================================
+  // STEP 3: 独立チェーン同士をバトンタッチ結合する
+  // ==========================================
   let currentChainObj = null;
   let minStartDist = Infinity;
   let isReversedStart = false;
 
+  // 出発駅に一番近いチェーンを主軸に選定
   independentChains.forEach(ch => {
+    if (!ch.points || ch.points.length === 0) return;
     const dHead = haversine(startCoord, ch.points[0]);
     const dTail = haversine(startCoord, ch.points[ch.points.length - 1]);
     if (dHead < minStartDist) { minStartDist = dHead; currentChainObj = ch; isReversedStart = false; }
     if (dTail < minStartDist) { minStartDist = dTail; currentChainObj = ch; isReversedStart = true; }
   });
 
-  // 主軸の方向を「乗車駅 → 降車駅」の方向に整える
+  // 万が一選定に失敗した場合の安全装置
+  if (!currentChainObj) currentChainObj = independentChains[0];
+
   let finalRoute = currentChainObj.points.slice();
   if (isReversedStart) finalRoute.reverse();
 
-  // 使用済みチェーンを管理
-  const usedRelIds = new Set([currentChainObj.relId]);
+  // 探索プールから主軸を削除（無限ループの物理的遮断）
+  independentChains = independentChains.filter(ch => ch.relId !== currentChainObj.relId);
 
-  // まだ接続していないチェーンが残っている限り、末端へバトンタッチ結合を試みる
   let extended = true;
-  while (extended) {
+  while (extended && independentChains.length > 0) {
     extended = false;
+    if (finalRoute.length === 0) break;
     const currentTail = finalRoute[finalRoute.length - 1];
 
     let nextChainObj = null;
-    let minGap = 0.005; // バトンタッチを許容する最大ギャップ（約500m以内）
+    let minGap = 0.01; // 最大許容隙間 1km
     let isReversedNext = false;
+    let targetIndex = -1;
 
-    independentChains.forEach(ch => {
-      if (usedRelIds.has(ch.relId)) return; // 既に使用した系統はスキップ
-
+    for (let i = 0; i < independentChains.length; i++) {
+      const ch = independentChains[i];
+      if (!ch.points || ch.points.length === 0) continue;
+      
       const dHead = haversine(currentTail, ch.points[0]);
       const dTail = haversine(currentTail, ch.points[ch.points.length - 1]);
 
-      if (dHead < minGap) { minGap = dHead; nextChainObj = ch; isReversedNext = false; }
-      if (dTail < minGap) { minGap = dTail; nextChainObj = ch; isReversedNext = true; }
-    });
+      if (dHead < minGap) { minGap = dHead; nextChainObj = ch; isReversedNext = false; targetIndex = i; }
+      if (dTail < minGap) { minGap = dTail; nextChainObj = ch; isReversedNext = true; targetIndex = i; }
+    }
 
-    // 接続可能な次の系統（直通先など）が見つかった場合、合体する
-    if (nextChainObj) {
+    if (nextChainObj && targetIndex !== -1) {
       let nextPoints = nextChainObj.points.slice();
       if (isReversedNext) nextPoints.reverse();
       
-      // 重複・接続点の重複を避けてマージ
       finalRoute = finalRoute.concat(nextPoints.slice(1));
-      usedRelIds.add(nextChainObj.relId);
-      log.push({t:'info', msg: `系統接続成功: ${currentChainObj.relId} ➔ ${nextChainObj.relId} (ギャップ: ${Math.round(minGap * 1000)}m)`});
+      log.push({t:'info', msg: `リレーション接続: ${currentChainObj.relId} ➔ ${nextChainObj.relId} (隙間: ${Math.round(minGap * 1000)}m)`});
+      
       currentChainObj = nextChainObj;
+      independentChains.splice(targetIndex, 1); // 結合したチェーンをプールから完全に消去
       extended = true;
     }
   }
 
   // ==========================================
-  // STEP 4: 地理的範囲（乗車駅〜降車駅）による最終切り詰め（はみ出しカット）
+  // STEP 4: 地理的範囲による最終切り詰め（カーブ路線の間引き防止版）
   // ==========================================
   const totalStationDist = haversine(startCoord, endCoord);
   
   let result = finalRoute.filter(pt => {
     const dStart = haversine(startCoord, pt);
     const dEnd = haversine(endCoord, pt);
-    const margin = 0.5; // 駅の前後500mまでのオーバーラン・引き込み線を許容
-    return (dStart <= totalStationDist + margin) && (dEnd <= totalStationDist + margin);
+    
+    // 始発駅より「手前にはみ出している部分」のカット
+    if (dStart > totalStationDist + 1.0 && dStart > dEnd) return false;
+    // 終着駅より「先にはみ出している部分」のカット
+    if (dEnd > totalStationDist + 1.0 && dEnd > dStart) return false;
+    
+    return true;
   });
 
-  if (result.length === 0) result = finalRoute; // 万が一全滅した場合は安全策として維持
+  if (result.length === 0) result = finalRoute;
 
-  // 最終的な進行方向の調整 (result[0]がstartCoordに一番近くなるように)
+  // 進行方向の最終微調整
   if (result.length >= 2) {
     const startDist = haversine(startCoord, result[0]);
     const endDist = haversine(startCoord, result[result.length - 1]);
@@ -486,6 +512,15 @@ function stitchWays(ways, startCoord, endCoord, log) {
       result.reverse();
     }
   }
+
+  // ログ出力
+  try {
+    if (result.length > 0) {
+      const nStart = findNearestStationName(result[0]);
+      const nEnd = findNearestStationName(result[result.length - 1]);
+      log.push({t:'info', msg: `ルート確定: 端点1最寄=${nStart} / 端点2最寄=${nEnd}`});
+    }
+  } catch(e) {}
 
   log.push({t:'info', msg: `最終描画点数: ${result.length}`});
   return result;
