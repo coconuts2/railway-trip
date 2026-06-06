@@ -334,122 +334,117 @@ function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 // 始点・終点に最も近い点の間だけをスライスする。
 // これによりジグザグや巻き込み（途中で別方向に伸びた支線）を排除する。
 function stitchWays(ways, startCoord, endCoord, log) {
-  // ==========================================
-  // 【超・強力濾過】最初に入力配列から不純物（undefinedやゴミデータ）を完全除去
-  // ==========================================
-  if (!ways || !Array.isArray(ways)) return [];
-  
+  if (!ways || !Array.isArray(ways) || ways.length === 0) return [];
+
+  // 【ChatGPT指摘反映】検証のために、インプットされた始点・終点座標を完全透過
+  log.push({t:'info', msg: `【座標検証】アプリ指定始点: [${startCoord}] / 終点: [${endCoord}]`});
+
   const cleanWays = ways.filter(w => {
     if (!w || typeof w !== 'object') return false;
-    // points、nodes、または配列そのものである有効なデータだけを生かす
-    const hasPoints = w.points && Array.isArray(w.points) && w.points.length > 0;
-    const hasNodes = w.nodes && Array.isArray(w.nodes) && w.nodes.length > 0;
-    const isPureArray = Array.isArray(w) && w.length > 0;
-    return hasPoints || hasNodes || isPureArray;
+    const pts = w.points || w.nodes || (Array.isArray(w) ? w : null);
+    return Array.isArray(pts) && pts.length > 0;
   });
 
   if (cleanWays.length === 0) {
-    log.push({t:'warn', msg: '有効なレール形状データが1件もありません(fallbackへ移行)'});
+    log.push({t:'warn', msg: '有効なレール形状データがありません。'});
     return [];
   }
 
-  log.push({t:'info', msg: `--- 連結アルゴリズム開始 (安全なWay数: ${cleanWays.length}) ---`});
-
   // ==========================================
-  // STEP 1: リレーションごとにWayを安全に分離
+  // STEP 1: リレーションごとにグループ分離＆ログ出力
   // ==========================================
   const groups = {};
   cleanWays.forEach(w => {
-    // 完全に濾過されているため、wがundefinedになることは絶対ありません
-    let relId = w.relId || (w.tags && w.tags.name) || "unknown_line";
-    
-    // キーが何であれ、文字列として確実に処理
+    let relId = w.relId || "unknown_line";
     relId = String(relId).trim();
-    if (!relId || relId === "undefined") {
-      relId = "unknown_line";
-    }
+    if (!relId || relId === "undefined" || relId === "null") relId = "unknown_line";
     
-    if (!groups[relId]) {
-      groups[relId] = [];
-    }
+    if (!groups[relId]) groups[relId] = [];
     
-    let pts = null;
-    if (Array.isArray(w)) pts = w;
-    else if (w.points) pts = w.points;
-    else if (w.nodes) pts = w.nodes;
-
+    let pts = w.points || w.nodes || (Array.isArray(w) ? w : null);
     if (pts && pts.length > 0) {
-      groups[relId].push(pts.slice()); // 参照を切って格納
+      groups[relId].push(pts.slice());
     }
   });
 
-  // 有効なグループキーのみを抽出
+  // 【ChatGPT指摘反映】各リレーションに何本のWayが紐づいているかを完全に可視化
+  Object.keys(groups).forEach(relId => {
+    log.push({t:'info', msg: `  └ [分属ログ] Rel ID: ${relId} に ${groups[relId].length} 本のWayを格納`});
+  });
+
   const relIds = Object.keys(groups).filter(id => groups[id] && groups[id].length > 0);
   if (relIds.length === 0) return [];
 
-  log.push({t:'info', msg: `独立リレーション数: ${relIds.length} (${relIds.join(', ')})`});
-
   // ==========================================
-  // STEP 2: 各リレーション内で独立チェーンを作成
+  // STEP 2: 各リレーション内で独立チェーンを作成（15m数珠繋ぎ）
   // ==========================================
   let independentChains = [];
-  
+  const WAY_CONNECT_THRESHOLD = 15.0; 
+  let globalChainCounter = 0;
+
   relIds.forEach(relId => {
     let pool = [];
     groups[relId].forEach(pts => {
       if (Array.isArray(pts) && pts.length > 0) pool.push(pts);
     });
 
-    if (pool.length === 0) return;
+    while (pool.length > 0) {
+      let chain = pool.shift().slice();
+      let progress = true;
 
-    let chain = pool.shift().slice();
-    let progress = true;
+      while (progress && pool.length > 0) {
+        progress = false;
+        const head = chain[0];
+        const tail = chain[chain.length - 1];
+        if (!head || !tail) break;
 
-    while (progress && pool.length > 0) {
-      progress = false;
-      const head = chain[0];
-      const tail = chain[chain.length - 1];
-      if (!head || !tail) break;
+        for (let i = 0; i < pool.length; i++) {
+          const p = pool[i];
+          if (!p || p.length === 0) continue;
+          const pHead = p[0];
+          const pTail = p[p.length - 1];
 
-      for (let i = 0; i < pool.length; i++) {
-        const p = pool[i];
-        if (!p || p.length === 0) continue;
-        const pHead = p[0];
-        const pTail = p[p.length - 1];
-
-        if (haversine(tail, pHead) < 0.001) {
-          chain = chain.concat(p.slice(1));
-          pool.splice(i, 1); progress = true; break;
-        }
-        if (haversine(tail, pTail) < 0.001) {
-          chain = chain.concat(p.slice().reverse().slice(1));
-          pool.splice(i, 1); progress = true; break;
-        }
-        if (haversine(head, pTail) < 0.001) {
-          chain = p.slice().concat(chain.slice(1));
-          pool.splice(i, 1); progress = true; break;
-        }
-        if (haversine(head, pHead) < 0.001) {
-          chain = p.slice().reverse().concat(chain.slice(1));
-          pool.splice(i, 1); progress = true; break;
+          if (haversine(tail, pHead) < WAY_CONNECT_THRESHOLD) {
+            chain = chain.concat(p.slice(1));
+            pool.splice(i, 1); progress = true; break;
+          }
+          if (haversine(tail, pTail) < WAY_CONNECT_THRESHOLD) {
+            chain = chain.concat(p.slice().reverse().slice(1));
+            pool.splice(i, 1); progress = true; break;
+          }
+          if (haversine(head, pTail) < WAY_CONNECT_THRESHOLD) {
+            chain = p.slice().concat(chain.slice(1));
+            pool.splice(i, 1); progress = true; break;
+          }
+          if (haversine(head, pHead) < WAY_CONNECT_THRESHOLD) {
+            chain = p.slice().reverse().concat(chain.slice(1));
+            pool.splice(i, 1); progress = true; break;
+          }
         }
       }
-    }
-    
-    if (chain && chain.length > 0) {
-      independentChains.push({ relId: relId, points: chain });
+      
+      if (chain && chain.length > 0) {
+        independentChains.push({
+          chainId: globalChainCounter++,
+          relId: relId,
+          points: chain
+        });
+        // 【ChatGPT指摘反映】生成されたすべてのChainの構成情報をトレース
+        log.push({t:'info', msg: `    📦 Chain生成 -> [ChainID: ${globalChainCounter-1}] (Rel: ${relId}) 内で ${chain.length} 個のポイントを集約完了`});
+      }
     }
   });
 
   if (independentChains.length === 0) return [];
 
   // ==========================================
-  // STEP 3: 独立チェーン同士をバトンタッチ結合
+  // STEP 3: 独立チェーン同士を近傍順に結合する
   // ==========================================
   let currentChainObj = null;
   let minStartDist = Infinity;
   let isReversedStart = false;
 
+  // 主軸（起点）の選定
   independentChains.forEach(ch => {
     if (!ch.points || ch.points.length === 0) return;
     const dHead = haversine(startCoord, ch.points[0]);
@@ -460,19 +455,25 @@ function stitchWays(ways, startCoord, endCoord, log) {
 
   if (!currentChainObj) currentChainObj = independentChains[0];
 
+  // 【ChatGPT指摘反映】起点に選ばれたチェーンが、駅（始点座標）から物理的に何メートル離れているかを追跡
+  log.push({t:'info', msg: `【起点確定】始点駅から最も近い [ChainID: ${currentChainObj.chainId}] (Rel: ${currentChainObj.relId}) を主軸に選択。駅との距離: ${Math.round(minStartDist)}m`});
+
   let finalRoute = currentChainObj.points.slice();
   if (isReversedStart) finalRoute.reverse();
 
-  independentChains = independentChains.filter(ch => ch.relId !== currentChainObj.relId);
+  // プールから起点を除外
+  independentChains = independentChains.filter(ch => ch.chainId !== currentChainObj.chainId);
 
   let extended = true;
+  const REL_CONNECT_THRESHOLD = 300.0; // 誤接続を防ぐ300m制限
+
   while (extended && independentChains.length > 0) {
     extended = false;
     if (finalRoute.length === 0) break;
     const currentTail = finalRoute[finalRoute.length - 1];
 
     let nextChainObj = null;
-    let minGap = 0.01; // 1km
+    let minGap = REL_CONNECT_THRESHOLD;
     let isReversedNext = false;
     let targetIndex = -1;
 
@@ -492,7 +493,9 @@ function stitchWays(ways, startCoord, endCoord, log) {
       if (isReversedNext) nextPoints.reverse();
       
       finalRoute = finalRoute.concat(nextPoints.slice(1));
-      log.push({t:'info', msg: `リレーション接続: ${currentChainObj.relId} ➔ ${nextChainObj.relId} (隙間: ${Math.round(minGap * 1000)}m)`});
+      
+      // 【ChatGPT指摘反映】接続ログのフォーマットを完全強化
+      log.push({t:'info', msg: `🔗 Chain接続成功: [Chain:${currentChainObj.chainId} (Rel:${currentChainObj.relId})] ➔ [Chain:${nextChainObj.chainId} (Rel:${nextChainObj.relId})] (ギャップ距離: ${Math.round(minGap)}m)`});
       
       currentChainObj = nextChainObj;
       independentChains.splice(targetIndex, 1);
@@ -500,39 +503,25 @@ function stitchWays(ways, startCoord, endCoord, log) {
     }
   }
 
-  // ==========================================
-  // STEP 4: 地理的範囲による最終切り詰め
-  // ==========================================
-  const totalStationDist = haversine(startCoord, endCoord);
-  
-  let result = finalRoute.filter(pt => {
-    const dStart = haversine(startCoord, pt);
-    const dEnd = haversine(endCoord, pt);
-    if (dStart > totalStationDist + 1.0 && dStart > dEnd) return false;
-    if (dEnd > totalStationDist + 1.0 && dEnd > dStart) return false;
-    return true;
-  });
-
-  if (result.length === 0) result = finalRoute;
-
-  if (result.length >= 2) {
-    const startDist = haversine(startCoord, result[0]);
-    const endDist = haversine(startCoord, result[result.length - 1]);
+  // 方向転換チェック
+  if (finalRoute.length >= 2) {
+    const startDist = haversine(startCoord, finalRoute[0]);
+    const endDist = haversine(startCoord, finalRoute[finalRoute.length - 1]);
     if (startDist > endDist) {
-      result.reverse();
+      finalRoute.reverse();
     }
   }
 
   try {
-    if (result.length > 0) {
-      const nStart = findNearestStationName(result[0]);
-      const nEnd = findNearestStationName(result[result.length - 1]);
-      log.push({t:'info', msg: `ルート確定: 端点1最寄=${nStart} / 端点2最寄=${nEnd}`});
+    if (finalRoute.length > 0) {
+      const nStart = findNearestStationName(finalRoute[0]);
+      const nEnd = findNearestStationName(finalRoute[finalRoute.length - 1]);
+      log.push({t:'info', msg: `🏁 ルート結合完了: 端点1最寄=${nStart} / 端点2最寄=${nEnd}`});
     }
   } catch(e) {}
 
-  log.push({t:'info', msg: `最終描画点数: ${result.length}`});
-  return result;
+  log.push({t:'info', msg: `最終描画点数: ${finalRoute.length}`});
+  return finalRoute;
 }
 
 // =====================================================================
@@ -625,62 +614,65 @@ out geom;`;
   return {wayEls, relNames:['(エリア検索)']};
 }
 
-async function fetchRailCoords(seg, log){
-  if(seg.fallbackSkip){ log.push({t:'info', msg:'fallbackSkip指定 → API取得せず直線描画'}); return null; }
-  const bbox=calcBbox(seg);
-  if(!bbox){ log.push({t:'err', msg:'bbox計算不可'}); return null; }
-  const fromCoord=seg.fallback?.[0], toCoord=seg.fallback?.[seg.fallback.length-1];
-  if(!fromCoord||!toCoord){ log.push({t:'err', msg:'始終点座標なし'}); return null; }
+async function fetchRailCoords(seg, log) {
+  const lineQuery = (seg.lineNames && seg.lineNames.length > 0) ? seg.lineNames[0] : (seg.lineName || "");
+  if (!lineQuery) return null;
 
-  log.push({t:'info', msg:`乗車駅(fallback始点): [${fromCoord[0].toFixed(4)}, ${fromCoord[1].toFixed(4)}]`});
-  log.push({t:'info', msg:`降車駅(fallback終点): [${toCoord[0].toFixed(4)}, ${toCoord[1].toFixed(4)}]`});
+  log.push({t:'info', msg: `検索した路線名: ${lineQuery}`});
+  
+  // 【ChatGPT指摘の反映】無差別な部分一致(~"")を廃止し、前方一致(^"")に厳格化してゴミRelationの混入を防ぐ
+  const url = `https://overpass-api.de/api/interpreter?data=[out:json][timeout:30];relation["route"="train"]["name"~"^${lineQuery}"];out geom;`;
+  
+  const res = await fetch(url);
+  if (res.status === 429) throw new Error("429 レート制限");
+  if (!res.ok) throw new Error(`HTTPエラー ${res.status}`);
 
-  // --- 戦略A: 路線名 ---
-  let res = await strategyByLineName(seg, bbox, log);
-  let stitched = null;
-  if(res){
-    stitched = stitchWays(res.wayEls, fromCoord, toCoord);
-    if(stitched){
-      log.push({t:'info', msg:`　連結: ${stitched.usedWays}/${stitched.totalWays} wayを使用`});
-      log.push({t:'info', msg:`　始点ギャップ: ${stitched.startGap.toFixed(0)}m / 終点ギャップ: ${stitched.endGap.toFixed(0)}m`});
-      log.push({t:'info', msg:`　抽出区間の経路長: ${(stitched.routeLen/1000).toFixed(1)}km（駅間直線距離: ${(stitched.directLen/1000).toFixed(1)}km）`});
-    }
+  const data = await res.json();
+  if (!data || !data.elements || data.elements.length === 0) return null;
+
+  const elements = data.elements;
+  const rels = elements.filter(el => el.type === 'relation');
+  if (rels.length === 0) return null;
+
+  // 【ChatGPT指摘反映】総Relation数を明確に記録
+  log.push({t:'info', msg: `Overpassから返却されたRelation総数: ${rels.length}`});
+
+  if (rels.length === 1) {
+    log.push({t:'info', msg: `OSM路線名(1): ${rels[0].tags?.name || '未命名'} (ID: ${rels[0].id}) way総数: ${elements.filter(e=>e.type==='way').length}`});
+  } else {
+    const names = rels.map(r => `${r.tags?.name || '未命名'}(ID:${r.id})`).join(' / ');
+    log.push({t:'info', msg: `⚠️複数Relation検知(${rels.length}件): ${names}`});
   }
 
-  // --- 戦略A の結果が不十分なら戦略B ---
-  const insufficient = !stitched || stitched.startGap>NEAR_STATION || stitched.endGap>NEAR_STATION || stitched.coords.length<2;
-  if(insufficient){
-    log.push({t:'warn', msg:`戦略Aの結果が不十分（端点が駅から離れている）→ 戦略B(エリア検索)を試行`});
-    const resB = await strategyByArea(seg, bbox, log);
-    if(resB){
-      const stB = stitchWays(resB.wayEls, fromCoord, toCoord);
-      if(stB){
-        log.push({t:'info', msg:`　連結(B): ${stB.usedWays}/${stB.totalWays} wayを使用`});
-        log.push({t:'info', msg:`　始点ギャップ(B): ${stB.startGap.toFixed(0)}m / 終点ギャップ(B): ${stB.endGap.toFixed(0)}m`});
-        // BがAより良ければB採用
-        if(!stitched || (stB.startGap+stB.endGap < stitched.startGap+stitched.endGap)){
-          stitched = stB;
-          res = resB;
-          log.push({t:'ok', msg:`　→ 戦略Bの結果を採用`});
-        } else {
-          log.push({t:'info', msg:`　→ 戦略Aの方が良好なため戦略A維持`});
+  // Way→RelationのO(1)高速逆引き辞書構築
+  const wayToRel = {};
+  rels.forEach(rel => {
+    if (rel.members && Array.isArray(rel.members)) {
+      rel.members.forEach(m => {
+        if (m.type === 'way' && m.ref) {
+          wayToRel[String(m.ref)] = String(rel.id);
         }
-      }
+      });
     }
-  }
+  });
 
-  if(!stitched || stitched.coords.length<2){
-    log.push({t:'err', msg:'有効な経路を構築できず → fallback採用'});
-    return null;
-  }
+  const ways = [];
+  elements.forEach(el => {
+    if (el.type === 'way' && el.geometry) {
+      let assignedRelId = wayToRel[String(el.id)];
+      if (!assignedRelId) {
+        assignedRelId = rels[0] ? String(rels[0].id) : "unknown_line";
+      }
 
-  // 端点情報をログに出力（APIを追加で叩かず座標のみ記録）
-  const ep1=stitched.coords[0], ep2=stitched.coords[stitched.coords.length-1];
-  log.push({t:'info', msg:`描画線の端点1: [${ep1[0].toFixed(4)}, ${ep1[1].toFixed(4)}]`});
-  log.push({t:'info', msg:`描画線の端点2: [${ep2[0].toFixed(4)}, ${ep2[1].toFixed(4)}]`});
-  log.push({t:'info', msg:`　端点1→乗車駅距離: ${stitched.startGap.toFixed(0)}m / 端点2→降車駅距離: ${stitched.endGap.toFixed(0)}m`});
+      ways.push({
+        relId: assignedRelId,
+        points: el.geometry.map(g => [g.lat, g.lon]),
+        tags: el.tags || {}
+      });
+    }
+  });
 
-  return stitched.coords;
+  return stitchWays(ways, seg.fallback[0], seg.fallback[seg.fallback.length - 1], log);
 }
 
 // =====================================================================
