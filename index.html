@@ -329,226 +329,209 @@ function haversine(a,b){
 }
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 
-// wayを始点→終点の順に連結し、乗降駅間だけを経路順に抽出する
-// ポイント: 連結後のchainを「始点からの経路距離（累積距離）」で順序づけ、
-// 始点・終点に最も近い点の間だけをスライスする。
-// これによりジグザグや巻き込み（途中で別方向に伸びた支線）を排除する。
-// wayを始点→終点の順に連結し、乗降駅間だけを経路順に抽出する
-// 【50m大幅緩和＆マルチ探索＆大チェーンログ搭載版】
-function stitchWays(ways, startCoord, endCoord, log) {
-  if (!ways || !Array.isArray(ways) || ways.length === 0) return [];
+// =====================================================================
+// グラフ構築 → 乗車駅から全方向chain探索 → 降車駅到達chainを選択
+// =====================================================================
 
-  log.push({t:'info', msg: `【本線集約・マルチ探索】アプリ指定始点: [${startCoord}] ➔ 終点: [${endCoord}]`});
+// way端点を量子化してノードIDにする（約1.1m精度で端点一致を判定）
+function nodeKey(lat, lon){ return lat.toFixed(5)+","+lon.toFixed(5); }
 
-  const cleanWays = ways.filter(w => {
-    if (!w || typeof w !== 'object') return false;
-    const pts = w.points || w.nodes || (Array.isArray(w) ? w : null);
-    return Array.isArray(pts) && pts.length > 0;
-  });
+const NODE_MERGE = 50; // 近接端点をマージする閾値(m)。駅構内・会社境界の分断を吸収。
 
-  if (cleanWays.length === 0) {
-    log.push({t:'warn', msg: '有効な形状データ（座標配列）を持つWayがプール内にありません。'});
-    return [];
-  }
-
-  // STEP 1: リレーションごとにグループ分離
-  const groups = {};
-  cleanWays.forEach(w => {
-    let relId = w.relId || "unknown_line";
-    relId = String(relId).trim();
-    if (!relId || relId === "undefined" || relId === "null") relId = "unknown_line";
-    
-    if (!groups[relId]) groups[relId] = [];
-    
-    let pts = w.points || w.nodes || (Array.isArray(w) ? w : null);
-    if (pts && pts.length > 0) {
-      groups[relId].push(pts.slice());
-    }
-  });
-
-  const relIds = Object.keys(groups).filter(id => groups[id] && groups[id].length > 0);
-  if (relIds.length === 0) return [];
-
-  // ========================================================
-  // STEP 2: 各リレーション内で独立チェーンを作成
-  // 【改善点】駅構内や複線の隙間を突破するため 15m ➔ 50m へ大幅緩和！
-  // ========================================================
-  let independentChains = [];
-  const WAY_CONNECT_THRESHOLD = 50.0; 
-  let globalChainCounter = 0;
-
-  relIds.forEach(relId => {
-    let pool = groups[relId].map(p => p.slice());
-
-    while (pool.length > 0) {
-      let chain = pool.shift().slice();
-      let progress = true;
-
-      while (progress && pool.length > 0) {
-        progress = false;
-        const head = chain[0];
-        const tail = chain[chain.length - 1];
-        if (!head || !tail) break;
-
-        for (let i = 0; i < pool.length; i++) {
-          const p = pool[i];
-          if (!p || p.length === 0) continue;
-          const pHead = p[0];
-          const pTail = p[p.length - 1];
-
-          if (haversine(tail, pHead) < WAY_CONNECT_THRESHOLD) {
-            chain = chain.concat(p.slice(1)); pool.splice(i, 1); progress = true; break;
-          }
-          if (haversine(tail, pTail) < WAY_CONNECT_THRESHOLD) {
-            chain = chain.concat(p.slice().reverse().slice(1)); pool.splice(i, 1); progress = true; break;
-          }
-          if (haversine(head, pTail) < WAY_CONNECT_THRESHOLD) {
-            chain = p.slice().concat(chain.slice(1)); pool.splice(i, 1); progress = true; break;
-          }
-          if (haversine(head, pHead) < WAY_CONNECT_THRESHOLD) {
-            chain = p.slice().reverse().concat(chain.slice(1)); pool.splice(i, 1); progress = true; break;
-          }
-        }
-      }
-      if (chain && chain.length > 0) {
-        independentChains.push({
-          chainId: globalChainCounter++,
-          relId: relId,
-          points: chain
-        });
-      }
-    }
-  });
-
-  if (independentChains.length === 0) return [];
-
-  // ========================================================
-  // 【ChatGPT要求】チェーンのサイズ分布（千切れ具合）の検証ログ出力
-  // ========================================================
-  log.push({t:'info', msg: `📊 [集約結果] 閾値50mでの独立チェーン総数 = ${independentChains.length} 個`});
-
-  const bigChains = independentChains
-    .filter(c => c.points.length >= 100)
-    .sort((a, b) => b.points.length - a.points.length);
-
-  log.push({t:'info', msg: `🔍 [大チェーン分布(100点以上)] 検出数: ${bigChains.length} 件`});
-  bigChains.forEach((ch, idx) => {
-    log.push({t:'info', msg: `  └ 大チェーン[${idx}]: ChainID:${ch.chainId} (Rel:${ch.relId}) / 構成点数:${ch.points.length}点` });
-  });
-
-  const smallChainsCount = independentChains.filter(c => c.points.length < 100).length;
-  log.push({t:'info', msg: `  └ その他、100点未満の微細なパーツ（側線・駅構内端線など）: ${smallChainsCount} 個`});
-
-
-  // ========================================================
-  // STEP 3: 【マルチ探索】すべての起点候補からルートを同時に伸ばす
-  // ========================================================
-  const REL_CONNECT_THRESHOLD = 500.0; // 駅構内ギャップ許容
-  let routeCandidates = [];
-
-  // 始点駅（例：富山駅）から500m以内にあるチェーンをすべてのスタート起点候補とする
-  const startCandidates = independentChains.filter(ch => {
-    const dHead = haversine(startCoord, ch.points[0]);
-    const dTail = haversine(startCoord, ch.points[ch.points.length - 1]);
-    return (dHead < 500.0 || dTail < 500.0);
-  });
-
-  if (startCandidates.length === 0) {
-    log.push({t:'warn', msg: `⚠️始点駅至近にパーツがないため、全パーツから強制全探索します。`});
-    startCandidates.push(...independentChains);
-  }
-
-  // それぞれの候補を起点に、ローカルメモリ上で限界まで数珠繋ぎを伸ばす
-  startCandidates.forEach((startChain) => {
-    let finalRoute = startChain.points.slice();
-    
-    // 始点駅に対して方向を正転させておく
-    const dHeadToStart = haversine(startCoord, finalRoute[0]);
-    const dTailToStart = haversine(startCoord, finalRoute[finalRoute.length - 1]);
-    if (dTailToStart < dHeadToStart) {
-      finalRoute.reverse();
-    }
-
-    let pool = independentChains.filter(ch => ch.chainId !== startChain.chainId);
-    let extended = true;
-
-    while (extended && pool.length > 0) {
-      extended = false;
-      const currentTail = finalRoute[finalRoute.length - 1];
-
-      let nextChainObj = null;
-      let minGap = REL_CONNECT_THRESHOLD;
-      let isReversedNext = false;
-      let targetIndex = -1;
-
-      for (let i = 0; i < pool.length; i++) {
-        const ch = pool[i];
-        const dHead = haversine(currentTail, ch.points[0]);
-        const dTail = haversine(currentTail, ch.points[ch.points.length - 1]);
-
-        if (dHead < minGap) { minGap = dHead; nextChainObj = ch; isReversedNext = false; targetIndex = i; }
-        if (dTail < minGap) { minGap = dTail; nextChainObj = ch; isReversedNext = true; targetIndex = i; }
-      }
-
-      if (nextChainObj && targetIndex !== -1) {
-        let nextPoints = nextChainObj.points.slice();
-        if (isReversedNext) nextPoints.reverse();
-        finalRoute = finalRoute.concat(nextPoints.slice(1));
-        pool.splice(targetIndex, 1);
-        extended = true;
-      }
-    }
-
-    // 伸ばしきった末端が、指定された「目的地の駅（高岡駅）」にどれだけ肉薄できたか
-    const finalTail = finalRoute[finalRoute.length - 1];
-    const distanceToGoal = haversine(endCoord, finalTail);
-
-    routeCandidates.push({
-      route: finalRoute,
-      goalDist: distanceToGoal,
-      startChainId: startChain.chainId
+// wayElements からグラフを構築。各wayは1本のエッジ。
+// 端点は近接クラスタリングでマージ（直通運転の会社境界などで端点が数mずれても接続）。
+// 返り値: { adj: Map<clusterKey, [{wayIdx, toKey, coords}]>, ways: [...] }
+function buildGraph(wayElements){
+  const ways = wayElements
+    .filter(el => el.geometry && el.geometry.length>=2)
+    .map((el,i) => {
+      const coords = el.geometry.map(g=>[g.lat,g.lon]);
+      return { idx:i, coords, wayId: el.id, relId: el._relId || null };
     });
+
+  // 全wayの端点を集める
+  const endpoints = []; // {wayIdx, end:'start'|'end', coord}
+  for(const w of ways){
+    endpoints.push({wayIdx:w.idx, end:'start', coord:w.coords[0]});
+    endpoints.push({wayIdx:w.idx, end:'end', coord:w.coords[w.coords.length-1]});
+  }
+
+  // 端点をクラスタリング: 量子化グリッドで近接候補を絞り、NODE_MERGE以内を同一クラスタに
+  // グリッドセル（約0.0005度≒50m四方）でバケット化
+  const cell = 0.0005;
+  const buckets = new Map();
+  const bkey = (lat,lon)=> Math.round(lat/cell)+","+Math.round(lon/cell);
+  endpoints.forEach((ep,i)=>{
+    const k=bkey(ep.coord[0],ep.coord[1]);
+    if(!buckets.has(k)) buckets.set(k,[]);
+    buckets.get(k).push(i);
   });
 
-  // ========================================================
-  // STEP 4: 【選別】目的地（終点駅）に最も近づくことができた大正解ルートを最終採用
-  // ========================================================
-  routeCandidates.sort((a, b) => a.goalDist - b.goalDist);
-  const bestCandidate = routeCandidates[0];
+  // Union-Find で近接端点をマージ
+  const parent = endpoints.map((_,i)=>i);
+  const find = x => { while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; };
+  const union = (a,b)=>{ const ra=find(a),rb=find(b); if(ra!==rb) parent[ra]=rb; };
 
-  log.push({t:'info', msg: `ルートシミュレーション候補総数: ${routeCandidates.length} 件`});
-  routeCandidates.forEach((c, i) => {
-    if(i < 3) {
-      log.push({t:'info', msg: `  候補[${i}]: 起点Chain=${c.startChainId} ➔ 終点駅までの残り距離: ${Math.round(c.goalDist)}m (点数: ${c.route.length}点)`});
+  endpoints.forEach((ep,i)=>{
+    const [lat,lon]=ep.coord;
+    const ci=Math.round(lat/cell), cj=Math.round(lon/cell);
+    // 隣接9セルを調べる
+    for(let di=-1;di<=1;di++) for(let dj=-1;dj<=1;dj++){
+      const k=(ci+di)+","+(cj+dj);
+      const arr=buckets.get(k); if(!arr) continue;
+      for(const j of arr){
+        if(j<=i) continue;
+        if(haversine(ep.coord, endpoints[j].coord) <= NODE_MERGE) union(i,j);
+      }
     }
   });
 
-  // どんなに伸ばしても目的地から5km以上離れている場合は、関係ない別方向の線路（市振行きなど）とみなして弾く
-  if (bestCandidate.goalDist > 5000.0) {
-    log.push({t:'warn', msg: `❌ 最優秀ルートでも目的地（終点駅）から5km以内に到達できませんでした（最短残り: ${Math.round(bestCandidate.goalDist)}m）。`});
-    return [];
+  // クラスタ代表 → クラスタキー文字列
+  const clusterKeyOf = epIdx => "C"+find(epIdx);
+
+  // 各wayの始点・終点クラスタキーを求める
+  const epIndexOf = {}; // wayIdx+'_'+end → endpoints index
+  endpoints.forEach((ep,i)=>{ epIndexOf[ep.wayIdx+'_'+ep.end]=i; });
+  ways.forEach(w=>{
+    w.startKey = clusterKeyOf(epIndexOf[w.idx+'_start']);
+    w.endKey   = clusterKeyOf(epIndexOf[w.idx+'_end']);
+  });
+
+  const adj = new Map();
+  const addEdge = (fromKey, w, reversed) => {
+    if(!adj.has(fromKey)) adj.set(fromKey, []);
+    const coords = reversed ? [...w.coords].reverse() : w.coords;
+    const toKey = reversed ? w.startKey : w.endKey;
+    adj.get(fromKey).push({wayIdx:w.idx, toKey, coords, relId:w.relId});
+  };
+  for(const w of ways){
+    addEdge(w.startKey, w, false);
+    addEdge(w.endKey, w, true);
   }
-
-  log.push({t:'info', msg: `👑 目的地に最も肉薄した最優秀ルートを最終採用しました！`});
-
-  let finalRoute = bestCandidate.route;
-
-  // 常に「始点駅側」から「終点駅側」への並び順になるよう整合性を整える
-  if (finalRoute.length >= 2) {
-    const startDist = haversine(startCoord, finalRoute[0]);
-    const endDist = haversine(startCoord, finalRoute[finalRoute.length - 1]);
-    if (startDist > endDist) {
-      finalRoute.reverse();
-    }
-  }
-
-  log.push({t:'info', msg: `最終描画点数: ${finalRoute.length}`});
-  return finalRoute;
+  return {adj, ways};
 }
 
-// =====================================================================
-// 路線データ取得（複数戦略）
-// =====================================================================
+// 座標に最も近いノードキー（クラスタ）を探す
+function nearestNodeKey(adj, ways, coord){
+  let best=null, bd=Infinity;
+  for(const w of ways){
+    const cand=[[w.coords[0],w.startKey],[w.coords[w.coords.length-1],w.endKey]];
+    for(const [pt,key] of cand){
+      const d=haversine(coord, pt);
+      if(d<bd){ bd=d; best=key; }
+    }
+  }
+  return {key:best, dist:bd};
+}
+
+// 乗車駅ノードから全方向にchainを構築する（分岐ごとに分割）。
+// 降車駅方向への枝刈り付き。各chainは {coords, endCoord, endGap, relIds, usedWayIdx}。
+function buildChains(graph, startKey, startCoord, endCoord, log){
+  const {adj, ways} = graph;
+  const chains = [];
+  const MAX_CHAINS = 40;        // chain数の上限（分岐爆発防止）
+  const MAX_STEPS = 4000;       // 1 chainあたり最大way本数
+
+  // DFSスタック: {curKey, coords, usedSet, relIds, prevDistToEnd}
+  const startStack = [{
+    curKey:startKey, coords:[], used:new Set(), relIds:new Set(),
+    lastApproach: haversine(startCoord, endCoord),
+  }];
+
+  // 最初の分岐: 乗車駅ノードから出る各エッジを起点に独立chainを開始
+  const firstEdges = adj.get(startKey) || [];
+  if(firstEdges.length===0){
+    log.push({t:'warn', msg:`　乗車駅ノードに接続するwayがありません`});
+    return [];
+  }
+
+  // 各初期方向ごとにDFSして、行き止まり or 降車駅到達 でchainを確定
+  for(const e0 of firstEdges){
+    if(chains.length>=MAX_CHAINS) break;
+    // 反復DFS（分岐で分割）
+    const stack=[{
+      curKey: e0.toKey,
+      coords: [...e0.coords],
+      used: new Set([e0.wayIdx]),
+      relIds: new Set(e0.relId!=null?[e0.relId]:[]),
+      bestEndGap: haversine(e0.coords[e0.coords.length-1], endCoord),
+    }];
+    while(stack.length){
+      if(chains.length>=MAX_CHAINS) break;
+      const st = stack.pop();
+      let {curKey, coords, used, relIds} = st;
+      let steps=0;
+      // 直進できる限り進み、分岐が来たら分割
+      while(steps++ < MAX_STEPS){
+        const tail = coords[coords.length-1];
+        const endGapNow = haversine(tail, endCoord);
+        // 降車駅に十分近づいたらchain確定（打ち切り）
+        if(endGapNow < NEAR_STATION){
+          break;
+        }
+        // 現在ノードから出る未使用エッジ（戻り防止）
+        const edges = (adj.get(curKey)||[]).filter(e=>!used.has(e.wayIdx));
+        if(edges.length===0) break; // 行き止まり
+        // 各エッジを「降車駅に近づくか」で評価
+        const scored = edges.map(e=>{
+          const eTail = e.coords[e.coords.length-1];
+          return {e, gap: haversine(eTail, endCoord)};
+        }).sort((a,b)=>a.gap-b.gap);
+
+        if(scored.length===1){
+          // 分岐なし: そのまま延長
+          const e=scored[0].e;
+          coords.push(...e.coords.slice(1));
+          used=new Set(used); used.add(e.wayIdx);
+          if(e.relId!=null){ relIds=new Set(relIds); relIds.add(e.relId); }
+          curKey=e.toKey;
+          continue;
+        }
+        // 分岐あり: 最良方向を現chainで継続、他方向は新chainとしてstackに積む
+        for(let k=1;k<scored.length;k++){
+          const e=scored[k].e;
+          const ncoords=[...coords, ...e.coords.slice(1)];
+          const nused=new Set(used); nused.add(e.wayIdx);
+          const nrel=new Set(relIds); if(e.relId!=null) nrel.add(e.relId);
+          stack.push({curKey:e.toKey, coords:ncoords, used:nused, relIds:nrel});
+        }
+        const best=scored[0].e;
+        coords.push(...best.coords.slice(1));
+        used=new Set(used); used.add(best.wayIdx);
+        if(best.relId!=null){ relIds=new Set(relIds); relIds.add(best.relId); }
+        curKey=best.toKey;
+      }
+      // chain確定
+      let eGap=Infinity, eIdx=coords.length-1;
+      coords.forEach((pt,i)=>{ const d=haversine(pt,endCoord); if(d<eGap){eGap=d;eIdx=i;} });
+      chains.push({coords, endGap:eGap, endIdx:eIdx, relIds:[...relIds], usedCount:used.size, tail:coords[coords.length-1]});
+    }
+  }
+  return chains;
+}
+
+// chain群から降車駅に最も近いものを選び、乗車駅→降車駅で切り出す
+function pickBestChain(chains, startCoord, endCoord){
+  if(chains.length===0) return null;
+  // 降車駅ギャップが最小のchainを選ぶ
+  chains.sort((a,b)=>a.endGap-b.endGap);
+  const best = chains[0];
+  // 乗車駅・降車駅に最も近い点で切り出し
+  let sIdx=0,sD=Infinity, eIdx=best.coords.length-1,eD=Infinity;
+  best.coords.forEach((pt,i)=>{
+    const ds=haversine(startCoord,pt), de=haversine(endCoord,pt);
+    if(ds<sD){sD=ds;sIdx=i;}
+    if(de<eD){eD=de;eIdx=i;}
+  });
+  let lo=Math.min(sIdx,eIdx), hi=Math.max(sIdx,eIdx);
+  let coords=best.coords.slice(lo,hi+1);
+  if(sIdx>eIdx) coords.reverse();
+  let routeLen=0;
+  for(let i=1;i<coords.length;i++) routeLen+=haversine(coords[i-1],coords[i]);
+  return {coords, startGap:sD, endGap:eD, routeLen, relIds:best.relIds,
+          directLen:haversine(startCoord,endCoord), nChains:chains.length, usedCount:best.usedCount};
+}
+
 function calcBbox(seg){
   if(seg.bbox) return seg.bbox;
   if(!seg.fallback?.length) return null;
@@ -561,36 +544,18 @@ function calcBbox(seg){
   return [mnLat-pad, mnLon-pad, mxLat+pad, mxLon+pad];
 }
 
-// OSMの駅ノードを探して端点の場所情報を返す
-async function identifyEndpoint(coord, bbox, log){
-  const [S,W,N,E]=bbox;
-  const q=`[out:json][timeout:15];node["railway"="station"](${S},${W},${N},${E});out body;`;
-  const {data}=await fetchOverpass(q, log);
-  if(!data?.elements) return null;
-  let best=null, bd=Infinity;
-  for(const n of data.elements){
-    if(n.type!=='node'||!n.tags?.name) continue;
-    const d=haversine(coord,[n.lat,n.lon]);
-    if(d<bd){bd=d;best={name:n.tags.name, dist:d, line:n.tags.line||n.tags.operator||''};}
-  }
-  return (best&&best.dist<NEAR_STATION)?best:(best?{...best,far:true}:null);
-}
-
-// 戦略A: 路線名でrelation取得
+// 戦略A: 路線名でrelation取得（relation別にwayをタグ付け）
 async function strategyByLineName(seg, bbox, log){
   const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
   if(lineNames.length===0) return null;
   const [S,W,N,E]=bbox;
   const nameRegex = lineNames.map(escapeRegex).join("|");
-  // relationのタグ(name)とwayのgeometryの両方を取得する
-  // 1行目: relationのタグを出力（路線名取得用）
-  // 2行目以降: relationに属するwayのgeometryを出力（描画用）
+  // relationのメンバー情報も取得して、各wayがどのrelation由来か分かるようにする
   const q=`[out:json][timeout:30];
 relation["route"~"train|tram|light_rail|monorail|subway|railway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
+out body;
 way(r)["railway"~"rail|tram|light_rail|monorail|subway"];
-out geom;
-relation["route"~"train|tram|light_rail|monorail|subway|railway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
-out tags;`;
+out geom;`;
   const t0=performance.now();
   const {data, cached, endpoint} = await fetchOverpass(q, log);
   const dt=((performance.now()-t0)/1000).toFixed(1);
@@ -598,24 +563,32 @@ out tags;`;
     log.push({t:'err', msg:`戦略A: データ取得失敗 (${dt}秒)`});
     return null;
   }
-  // 取得できた路線名を列挙（relationのtagsから）
-  const relNames=[...new Set(data.elements.filter(e=>e.type==='relation').map(e=>e.tags?.name).filter(Boolean))];
-  const relIds = data.elements.filter(e => e.type === 'relation').map(e => e.id);
-  const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+  // relationのメンバー構成から way→relId のマップを作る
+  const rels = data.elements.filter(e=>e.type==='relation');
+  const wayToRel = new Map();
+  for(const rel of rels){
+    for(const m of (rel.members||[])){
+      if(m.type==='way' && !wayToRel.has(m.ref)) wayToRel.set(m.ref, rel.id);
+    }
+  }
+  const relNames=[...new Set(rels.map(e=>e.tags?.name).filter(Boolean))];
+  const relIds = rels.map(e=>e.id);
+  let wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+  // 各wayにrelId付与
+  wayEls.forEach(w=>{ w._relId = wayToRel.get(w.id) ?? null; });
   log.push({t:'ok', msg:`戦略A: ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から取得 (${dt}秒)`});
-  log.push({t:'info', msg:`　検索した路線名: ${lineNames.join(' / ')}`});
-  log.push({t:'info', msg:`　OSMで見つかった路線(${relNames.length}): ${relNames.join(' / ')||'(該当relationなし)'}`});
-  log.push({t:'info', msg:`　relationID: ${relIds.join(', ') || 'なし'}`});
-  log.push({t:'info', msg:`　way数: ${wayEls.length}`});
+  log.push({t:'info', msg:`　検索路線名: ${lineNames.join(' / ')}`});
+  log.push({t:'info', msg:`　OSM一致relation(${relNames.length}): ${relNames.join(' / ')||'(なし)'}`});
+  log.push({t:'info', msg:`　relationID: ${relIds.join(', ')||'なし'}`});
+  log.push({t:'info', msg:`　取得way数: ${wayEls.length}`});
   if(wayEls.length===0) return null;
   return {wayEls, relNames};
 }
 
-// 戦略B: 乗降駅周辺の全鉄道wayを取得して連結（路線名に依存しない）
+// 戦略B: 乗降駅周辺の全鉄道way（路線名非依存）
 async function strategyByArea(seg, bbox, log){
   const fromCoord=seg.fallback?.[0], toCoord=seg.fallback?.[seg.fallback.length-1];
   if(!fromCoord||!toCoord) return null;
-  // 乗降駅を含む狭いbboxで全railを取得
   const pad=0.03;
   const S=Math.min(fromCoord[0],toCoord[0])-pad, N=Math.max(fromCoord[0],toCoord[0])+pad;
   const W=Math.min(fromCoord[1],toCoord[1])-pad, E=Math.max(fromCoord[1],toCoord[1])+pad;
@@ -630,94 +603,123 @@ out geom;`;
     return null;
   }
   const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+  wayEls.forEach(w=>{ w._relId=null; });
   log.push({t:'ok', msg:`戦略B(エリア): ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から取得 (${dt}秒)`});
   log.push({t:'info', msg:`　エリア内way数: ${wayEls.length}`});
   if(wayEls.length===0) return null;
   return {wayEls, relNames:['(エリア検索)']};
 }
 
-async function fetchRailCoords(seg, log) {
-  const lineQuery = (seg.lineNames && seg.lineNames.length > 0) ? seg.lineNames[0] : (seg.lineName || "");
-  if (!lineQuery) {
-    log.push({t:'warn', msg: `[警告] セグメントに路線名定義がありません`});
-    return null;
-  }
-
-  log.push({t:'info', msg: `【API検索開始】対象路線名: [${lineQuery}]`});
-
-  // 【ChatGPTの指摘を完全反映】末尾に (._;>;); を追加し、Relationに属するWayとNodeを強制展開して全取得する
-  const url = `https://overpass-api.de/api/interpreter?data=[out:json][timeout:30];(relation["route"="train"]["name"~"${lineQuery}"];relation["route"="railway"]["name"~"${lineQuery}"];);(._;>;);out geom;`;
-  
-  let res;
-  try {
-    res = await fetch(url);
-  } catch(e) {
-    log.push({t:'err', msg: `ネットワークエラー: ${e.message}`});
-    return null;
-  }
-
-  if (res.status === 429) {
-    log.push({t:'err', msg: `Overpass API レート制限(429)に到達しました`});
-    throw new Error("429 レート制限");
-  }
-  if (!res.ok) {
-    log.push({t:'err', msg: `HTTPエラー ステータス: ${res.status}`});
-    return null;
-  }
-
-  const data = await res.json();
-  if (!data || !data.elements || data.elements.length === 0) {
-    log.push({t:'warn', msg: `❌ Overpassから該当するデータが返されませんでした(0件)。`});
-    return null;
-  }
-
-  const elements = data.elements;
-  const rels = elements.filter(el => el.type === 'relation');
-  const allWays = elements.filter(el => el.type === 'way'); // 全Way要素をフィルタ抽出
-
-  if (rels.length === 0) {
-    log.push({t:'warn', msg: `⚠️ 該当するRelationが0件です。`});
-    return null;
-  }
-
-  // 【ChatGPT要求のログ】Relation数とWay数を正確に画面に出力
-  log.push({t:'info', msg: `🎉 取得成功 -> Relation総数: ${rels.length} 件 / Way総数: ${allWays.length} 件`});
-
-  // Relation名の内訳をログに全出力
-  const names = rels.map(r => `${r.tags?.name || '未命名'}(ID:${r.id}, route=${r.tags?.route})`).join(' / ');
-  log.push({t:'info', msg: `🔍 検出Relation内訳: ${names}`});
-
-  // Way→RelationのO(1)高速逆引き辞書構築
-  const wayToRel = {};
-  rels.forEach(rel => {
-    if (rel.members && Array.isArray(rel.members)) {
-      rel.members.forEach(m => {
-        if (m.type === 'way' && m.ref) {
-          wayToRel[String(m.ref)] = String(rel.id);
-        }
-      });
-    }
-  });
-
-  const ways = [];
-  allWays.forEach(el => {
-    if (el.geometry) {
-      let assignedRelId = wayToRel[String(el.id)];
-      if (!assignedRelId) {
-        // もし関係するWayなのに辞書にない場合は、第1Relationに仮所属させる
-        assignedRelId = String(rels[0].id);
-      }
-
-      ways.push({
-        relId: assignedRelId,
-        points: el.geometry.map(g => [g.lat, g.lon]),
-        tags: el.tags || {}
-      });
-    }
-  });
-
-  return stitchWays(ways, seg.fallback[0], seg.fallback[seg.fallback.length - 1], log);
+// 端点周辺の追加way検索（chain延長用・降車駅方向のみ）
+async function fetchExtensionWays(coord, log){
+  const pad=0.03;
+  const S=coord[0]-pad, N=coord[0]+pad, W=coord[1]-pad, E=coord[1]+pad;
+  const q=`[out:json][timeout:30];
+way["railway"~"rail|tram|light_rail|monorail|subway"](${S},${W},${N},${E});
+out geom;`;
+  const t0=performance.now();
+  const {data, cached, endpoint}=await fetchOverpass(q, log);
+  const dt=((performance.now()-t0)/1000).toFixed(1);
+  if(!data?.elements) { log.push({t:'warn', msg:`　延長検索: 取得失敗 (${dt}秒)`}); return []; }
+  const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+  wayEls.forEach(w=>{ w._relId=null; });
+  log.push({t:'info', msg:`　延長検索: ${cached?'キャッシュ':'API'}から ${wayEls.length}way (${dt}秒)`});
+  return wayEls;
 }
+
+const MAX_EXTEND = 3; // chain延長の最大回数
+
+async function fetchRailCoords(seg, log){
+  if(seg.fallbackSkip){ log.push({t:'info', msg:'fallbackSkip指定 → API取得せず直線描画'}); return null; }
+  const bbox=calcBbox(seg);
+  if(!bbox){ log.push({t:'err', msg:'bbox計算不可'}); return null; }
+  const fromCoord=seg.fallback?.[0], toCoord=seg.fallback?.[seg.fallback.length-1];
+  if(!fromCoord||!toCoord){ log.push({t:'err', msg:'始終点座標なし'}); return null; }
+
+  log.push({t:'info', msg:`乗車駅(fallback始点): [${fromCoord[0].toFixed(4)}, ${fromCoord[1].toFixed(4)}]`});
+  log.push({t:'info', msg:`降車駅(fallback終点): [${toCoord[0].toFixed(4)}, ${toCoord[1].toFixed(4)}]`});
+
+  // wayを集める（戦略A → 不十分なら戦略B）
+  let collectedWays = [];
+  let res = await strategyByLineName(seg, bbox, log);
+  if(res) collectedWays = res.wayEls;
+
+  // chainを構築して評価する関数
+  const tryBuild = (ways, label) => {
+    const graph = buildGraph(ways);
+    const snap = nearestNodeKey(graph.adj, graph.ways, fromCoord);
+    if(!snap.key){ log.push({t:'warn', msg:`　${label}: 乗車駅にスナップできるノードなし`}); return null; }
+    log.push({t:'info', msg:`　${label}: 乗車駅スナップ ${snap.dist.toFixed(0)}m / ノード数 ${graph.adj.size} / way数 ${graph.ways.length}`});
+    const chains = buildChains(graph, snap.key, fromCoord, toCoord, log);
+    log.push({t:'info', msg:`　${label}: 構築したchain数 ${chains.length}`});
+    // 上位3 chainの状況をログ
+    const top=[...chains].sort((a,b)=>a.endGap-b.endGap).slice(0,3);
+    top.forEach((c,i)=>{
+      log.push({t:'info', msg:`　　chain${i+1}: 降車駅ギャップ ${c.endGap.toFixed(0)}m / way${c.usedCount}本 / relation[${c.relIds.join(',')||'-'}]`});
+    });
+    const best = pickBestChain(chains, fromCoord, toCoord);
+    return {best, chains};
+  };
+
+  let result = collectedWays.length>0 ? tryBuild(collectedWays, '戦略A') : null;
+
+  // 戦略Aで降車駅に届かない → 戦略B
+  const insufficientA = !result?.best || result.best.endGap>NEAR_STATION;
+  if(insufficientA){
+    log.push({t:'warn', msg:`戦略Aで降車駅に到達できず（ギャップ ${result?.best?result.best.endGap.toFixed(0)+'m':'なし'}）→ 戦略B(エリア)を試行`});
+    const resB = await strategyByArea(seg, bbox, log);
+    if(resB){
+      collectedWays = resB.wayEls;
+      const rB = tryBuild(collectedWays, '戦略B');
+      if(rB?.best && (!result?.best || rB.best.endGap < result.best.endGap)){
+        result = rB;
+        log.push({t:'ok', msg:`　→ 戦略Bの結果を採用`});
+      } else {
+        log.push({t:'info', msg:`　→ 戦略Aを維持`});
+      }
+    }
+  }
+
+  // まだ降車駅に届かない → 端点周辺を追加検索してchain延長
+  let extendCount=0;
+  while(result?.best && result.best.endGap>NEAR_STATION && extendCount<MAX_EXTEND){
+    extendCount++;
+    const tail = result.best.coords[result.best.coords.length-1];
+    const tailGap = haversine(tail, toCoord);
+    log.push({t:'warn', msg:`延長${extendCount}/${MAX_EXTEND}: 端点[${tail[0].toFixed(4)},${tail[1].toFixed(4)}]が降車駅から${tailGap.toFixed(0)}m → 端点周辺を追加検索`});
+    const extWays = await fetchExtensionWays(tail, log);
+    if(extWays.length===0) break;
+    // 既存way + 追加wayを統合して再構築
+    const before = collectedWays.length;
+    const seen = new Set(collectedWays.map(w=>w.id));
+    for(const w of extWays){ if(!seen.has(w.id)){ collectedWays.push(w); seen.add(w.id); } }
+    log.push({t:'info', msg:`　way統合: ${before} → ${collectedWays.length}`});
+    const rExt = tryBuild(collectedWays, `延長${extendCount}後`);
+    if(rExt?.best && rExt.best.endGap < result.best.endGap - 50){
+      result = rExt; // 改善した場合のみ更新
+    } else {
+      log.push({t:'info', msg:`　改善が見られないため延長を打ち切り`});
+      break;
+    }
+  }
+
+  if(!result?.best || result.best.coords.length<2){
+    log.push({t:'err', msg:'有効な経路を構築できず → fallback採用'});
+    return null;
+  }
+
+  const b=result.best;
+  log.push({t:'ok', msg:`採用chain: 降車駅ギャップ ${b.endGap.toFixed(0)}m`});
+  log.push({t:'info', msg:`　始点ギャップ: ${b.startGap.toFixed(0)}m / 終点ギャップ: ${b.endGap.toFixed(0)}m`});
+  log.push({t:'info', msg:`　経路長: ${(b.routeLen/1000).toFixed(1)}km（直線距離 ${(b.directLen/1000).toFixed(1)}km）`});
+  log.push({t:'info', msg:`　採用relation: [${b.relIds.join(',')||'-'}] / 使用way ${b.usedCount}本 / 候補chain ${b.nChains}本`});
+  const ep1=b.coords[0], ep2=b.coords[b.coords.length-1];
+  log.push({t:'info', msg:`描画端点1: [${ep1[0].toFixed(4)}, ${ep1[1].toFixed(4)}]`});
+  log.push({t:'info', msg:`描画端点2: [${ep2[0].toFixed(4)}, ${ep2[1].toFixed(4)}]`});
+
+  return b.coords;
+}
+
 
 // =====================================================================
 // 地図・描画
