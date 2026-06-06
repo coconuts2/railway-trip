@@ -458,7 +458,9 @@ async function strategyByLineName(seg, bbox, log){
   const q=`[out:json][timeout:30];
 relation["route"~"train|tram|light_rail|monorail|subway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
 way(r)["railway"~"rail|tram|light_rail|monorail|subway"];
-out geom;`;
+out geom;
+relation["route"~"train|tram|light_rail|monorail|subway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
+out tags;`;
   const t0=performance.now();
   const {data, cached, endpoint} = await fetchOverpass(q, log);
   const dt=((performance.now()-t0)/1000).toFixed(1);
