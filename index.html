@@ -162,6 +162,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0607-1
+//  変更点（0606-16 比）:
+//   1. narrow_gauge 対応: railway値フィルタに narrow_gauge を追加（戦略A way(r)/戦略B/延長検索）。
+//      → 四日市あすなろう鉄道（内部線・八王子線）のwayが取得できるようになる。
+//   2. chain早期打ち切りの修正: 降車駅800m圏に入った瞬間で止めず、最接近を過ぎてから打ち切る。
+//      → 駅手前で途切れる問題（信楽・大村線・あをによし等）を緩和。NEAR_STATION値自体は不変。
+// =====================================================================
 // 設定
 // =====================================================================
 const CACHE_TTL = 7*24*60*60*1000;
@@ -170,6 +177,7 @@ const RETRY_WAIT = 30000;
 const MAX_RETRY = 3;
 const STITCH_GAP = 1000;       // way連結の最大ギャップ(m)
 const NEAR_STATION = 800;      // 端点が駅とみなせる距離(m)
+const STOP_HYSTERESIS = 150;   // chain打ち切り判定: 最接近を過ぎて再びこの距離(m)離れたら停止
 const ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
@@ -454,19 +462,21 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
       coords: [...e0.coords],
       used: new Set([e0.wayIdx]),
       relIds: new Set(e0.relId!=null?[e0.relId]:[]),
-      bestEndGap: haversine(e0.coords[e0.coords.length-1], endCoord),
+      minGap: haversine(e0.coords[e0.coords.length-1], endCoord),
     }];
     while(stack.length){
       if(chains.length>=MAX_CHAINS) break;
       const st = stack.pop();
-      let {curKey, coords, used, relIds} = st;
+      let {curKey, coords, used, relIds, minGap} = st;
       let steps=0;
       // 直進できる限り進み、分岐が来たら分割
       while(steps++ < MAX_STEPS){
         const tail = coords[coords.length-1];
         const endGapNow = haversine(tail, endCoord);
-        // 降車駅に十分近づいたらchain確定（打ち切り）
-        if(endGapNow < NEAR_STATION){
+        if(endGapNow < minGap) minGap = endGapNow;
+        // 降車駅近傍に入った後、最接近を過ぎて再び離れ始めたらchain確定（打ち切り）。
+        // 800m圏に入った瞬間で止めると最大800m手前で切れるため、最接近点を捉えてから止める。
+        if(minGap < NEAR_STATION && endGapNow > minGap + STOP_HYSTERESIS){
           break;
         }
         // 現在ノードから出る未使用エッジ（戻り防止）
@@ -493,7 +503,7 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
           const ncoords=[...coords, ...e.coords.slice(1)];
           const nused=new Set(used); nused.add(e.wayIdx);
           const nrel=new Set(relIds); if(e.relId!=null) nrel.add(e.relId);
-          stack.push({curKey:e.toKey, coords:ncoords, used:nused, relIds:nrel});
+          stack.push({curKey:e.toKey, coords:ncoords, used:nused, relIds:nrel, minGap});
         }
         const best=scored[0].e;
         coords.push(...best.coords.slice(1));
@@ -554,7 +564,7 @@ async function strategyByLineName(seg, bbox, log){
   const q=`[out:json][timeout:30];
 relation["route"~"train|tram|light_rail|monorail|subway|railway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
 out body;
-way(r)["railway"~"rail|tram|light_rail|monorail|subway"];
+way(r)["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"];
 out geom;`;
   const t0=performance.now();
   const {data, cached, endpoint} = await fetchOverpass(q, log);
@@ -593,7 +603,7 @@ async function strategyByArea(seg, bbox, log){
   const S=Math.min(fromCoord[0],toCoord[0])-pad, N=Math.max(fromCoord[0],toCoord[0])+pad;
   const W=Math.min(fromCoord[1],toCoord[1])-pad, E=Math.max(fromCoord[1],toCoord[1])+pad;
   const q=`[out:json][timeout:40];
-way["railway"~"rail|tram|light_rail|monorail|subway"](${S},${W},${N},${E});
+way["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"](${S},${W},${N},${E});
 out geom;`;
   const t0=performance.now();
   const {data, cached, endpoint}=await fetchOverpass(q, log);
@@ -615,7 +625,7 @@ async function fetchExtensionWays(coord, log){
   const pad=0.03;
   const S=coord[0]-pad, N=coord[0]+pad, W=coord[1]-pad, E=coord[1]+pad;
   const q=`[out:json][timeout:30];
-way["railway"~"rail|tram|light_rail|monorail|subway"](${S},${W},${N},${E});
+way["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"](${S},${W},${N},${E});
 out geom;`;
   const t0=performance.now();
   const {data, cached, endpoint}=await fetchOverpass(q, log);
