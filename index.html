@@ -333,10 +333,12 @@ function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 // ポイント: 連結後のchainを「始点からの経路距離（累積距離）」で順序づけ、
 // 始点・終点に最も近い点の間だけをスライスする。
 // これによりジグザグや巻き込み（途中で別方向に伸びた支線）を排除する。
+// wayを始点→終点の順に連結し、乗降駅間だけを経路順に抽出する
+// 【50m大幅緩和＆マルチ探索＆大チェーンログ搭載版】
 function stitchWays(ways, startCoord, endCoord, log) {
   if (!ways || !Array.isArray(ways) || ways.length === 0) return [];
 
-  log.push({t:'info', msg: `【アルゴリズム起動】アプリ指定始点: [${startCoord}] / 終点: [${endCoord}]`});
+  log.push({t:'info', msg: `【本線集約・マルチ探索】アプリ指定始点: [${startCoord}] ➔ 終点: [${endCoord}]`});
 
   const cleanWays = ways.filter(w => {
     if (!w || typeof w !== 'object') return false;
@@ -364,23 +366,19 @@ function stitchWays(ways, startCoord, endCoord, log) {
     }
   });
 
-  Object.keys(groups).forEach(relId => {
-    log.push({t:'info', msg: `  └ [グループ割当] RelationID: ${relId} に ${groups[relId].length} 本のWayを格納しました`});
-  });
-
   const relIds = Object.keys(groups).filter(id => groups[id] && groups[id].length > 0);
   if (relIds.length === 0) return [];
 
-  // STEP 2: 各リレーション内で独立チェーンを作成（15m数珠繋ぎ）
+  // ========================================================
+  // STEP 2: 各リレーション内で独立チェーンを作成
+  // 【改善点】駅構内や複線の隙間を突破するため 15m ➔ 50m へ大幅緩和！
+  // ========================================================
   let independentChains = [];
-  const WAY_CONNECT_THRESHOLD = 15.0; 
+  const WAY_CONNECT_THRESHOLD = 50.0; 
   let globalChainCounter = 0;
 
   relIds.forEach(relId => {
-    let pool = [];
-    groups[relId].forEach(pts => {
-      if (Array.isArray(pts) && pts.length > 0) pool.push(pts);
-    });
+    let pool = groups[relId].map(p => p.slice());
 
     while (pool.length > 0) {
       let chain = pool.shift().slice();
@@ -399,99 +397,143 @@ function stitchWays(ways, startCoord, endCoord, log) {
           const pTail = p[p.length - 1];
 
           if (haversine(tail, pHead) < WAY_CONNECT_THRESHOLD) {
-            chain = chain.concat(p.slice(1));
-            pool.splice(i, 1); progress = true; break;
+            chain = chain.concat(p.slice(1)); pool.splice(i, 1); progress = true; break;
           }
           if (haversine(tail, pTail) < WAY_CONNECT_THRESHOLD) {
-            chain = chain.concat(p.slice().reverse().slice(1));
-            pool.splice(i, 1); progress = true; break;
+            chain = chain.concat(p.slice().reverse().slice(1)); pool.splice(i, 1); progress = true; break;
           }
           if (haversine(head, pTail) < WAY_CONNECT_THRESHOLD) {
-            chain = p.slice().concat(chain.slice(1));
-            pool.splice(i, 1); progress = true; break;
+            chain = p.slice().concat(chain.slice(1)); pool.splice(i, 1); progress = true; break;
           }
           if (haversine(head, pHead) < WAY_CONNECT_THRESHOLD) {
-            chain = p.slice().reverse().concat(chain.slice(1));
-            pool.splice(i, 1); progress = true; break;
+            chain = p.slice().reverse().concat(chain.slice(1)); pool.splice(i, 1); progress = true; break;
           }
         }
       }
-      
       if (chain && chain.length > 0) {
         independentChains.push({
           chainId: globalChainCounter++,
           relId: relId,
           points: chain
         });
-        log.push({t:'info', msg: `    📦 Chain生成 -> [ChainID: ${globalChainCounter-1}] (Rel: ${relId}) 内で ${chain.length} 個のポイントを集約完了`});
       }
     }
   });
 
-  if (independentChains.length === 0) {
-    log.push({t:'warn', msg: `[警告] 15m以内で接続可能なチェーンが1つも生成されませんでした。`});
+  if (independentChains.length === 0) return [];
+
+  // ========================================================
+  // 【ChatGPT要求】チェーンのサイズ分布（千切れ具合）の検証ログ出力
+  // ========================================================
+  log.push({t:'info', msg: `📊 [集約結果] 閾値50mでの独立チェーン総数 = ${independentChains.length} 個`});
+
+  const bigChains = independentChains
+    .filter(c => c.points.length >= 100)
+    .sort((a, b) => b.points.length - a.points.length);
+
+  log.push({t:'info', msg: `🔍 [大チェーン分布(100点以上)] 検出数: ${bigChains.length} 件`});
+  bigChains.forEach((ch, idx) => {
+    log.push({t:'info', msg: `  └ 大チェーン[${idx}]: ChainID:${ch.chainId} (Rel:${ch.relId}) / 構成点数:${ch.points.length}点` });
+  });
+
+  const smallChainsCount = independentChains.filter(c => c.points.length < 100).length;
+  log.push({t:'info', msg: `  └ その他、100点未満の微細なパーツ（側線・駅構内端線など）: ${smallChainsCount} 個`});
+
+
+  // ========================================================
+  // STEP 3: 【マルチ探索】すべての起点候補からルートを同時に伸ばす
+  // ========================================================
+  const REL_CONNECT_THRESHOLD = 500.0; // 駅構内ギャップ許容
+  let routeCandidates = [];
+
+  // 始点駅（例：富山駅）から500m以内にあるチェーンをすべてのスタート起点候補とする
+  const startCandidates = independentChains.filter(ch => {
+    const dHead = haversine(startCoord, ch.points[0]);
+    const dTail = haversine(startCoord, ch.points[ch.points.length - 1]);
+    return (dHead < 500.0 || dTail < 500.0);
+  });
+
+  if (startCandidates.length === 0) {
+    log.push({t:'warn', msg: `⚠️始点駅至近にパーツがないため、全パーツから強制全探索します。`});
+    startCandidates.push(...independentChains);
+  }
+
+  // それぞれの候補を起点に、ローカルメモリ上で限界まで数珠繋ぎを伸ばす
+  startCandidates.forEach((startChain) => {
+    let finalRoute = startChain.points.slice();
+    
+    // 始点駅に対して方向を正転させておく
+    const dHeadToStart = haversine(startCoord, finalRoute[0]);
+    const dTailToStart = haversine(startCoord, finalRoute[finalRoute.length - 1]);
+    if (dTailToStart < dHeadToStart) {
+      finalRoute.reverse();
+    }
+
+    let pool = independentChains.filter(ch => ch.chainId !== startChain.chainId);
+    let extended = true;
+
+    while (extended && pool.length > 0) {
+      extended = false;
+      const currentTail = finalRoute[finalRoute.length - 1];
+
+      let nextChainObj = null;
+      let minGap = REL_CONNECT_THRESHOLD;
+      let isReversedNext = false;
+      let targetIndex = -1;
+
+      for (let i = 0; i < pool.length; i++) {
+        const ch = pool[i];
+        const dHead = haversine(currentTail, ch.points[0]);
+        const dTail = haversine(currentTail, ch.points[ch.points.length - 1]);
+
+        if (dHead < minGap) { minGap = dHead; nextChainObj = ch; isReversedNext = false; targetIndex = i; }
+        if (dTail < minGap) { minGap = dTail; nextChainObj = ch; isReversedNext = true; targetIndex = i; }
+      }
+
+      if (nextChainObj && targetIndex !== -1) {
+        let nextPoints = nextChainObj.points.slice();
+        if (isReversedNext) nextPoints.reverse();
+        finalRoute = finalRoute.concat(nextPoints.slice(1));
+        pool.splice(targetIndex, 1);
+        extended = true;
+      }
+    }
+
+    // 伸ばしきった末端が、指定された「目的地の駅（高岡駅）」にどれだけ肉薄できたか
+    const finalTail = finalRoute[finalRoute.length - 1];
+    const distanceToGoal = haversine(endCoord, finalTail);
+
+    routeCandidates.push({
+      route: finalRoute,
+      goalDist: distanceToGoal,
+      startChainId: startChain.chainId
+    });
+  });
+
+  // ========================================================
+  // STEP 4: 【選別】目的地（終点駅）に最も近づくことができた大正解ルートを最終採用
+  // ========================================================
+  routeCandidates.sort((a, b) => a.goalDist - b.goalDist);
+  const bestCandidate = routeCandidates[0];
+
+  log.push({t:'info', msg: `ルートシミュレーション候補総数: ${routeCandidates.length} 件`});
+  routeCandidates.forEach((c, i) => {
+    if(i < 3) {
+      log.push({t:'info', msg: `  候補[${i}]: 起点Chain=${c.startChainId} ➔ 終点駅までの残り距離: ${Math.round(c.goalDist)}m (点数: ${c.route.length}点)`});
+    }
+  });
+
+  // どんなに伸ばしても目的地から5km以上離れている場合は、関係ない別方向の線路（市振行きなど）とみなして弾く
+  if (bestCandidate.goalDist > 5000.0) {
+    log.push({t:'warn', msg: `❌ 最優秀ルートでも目的地（終点駅）から5km以内に到達できませんでした（最短残り: ${Math.round(bestCandidate.goalDist)}m）。`});
     return [];
   }
 
-  // STEP 3: 独立チェーン同士を近傍順に結合する
-  let currentChainObj = null;
-  let minStartDist = Infinity;
-  let isReversedStart = false;
+  log.push({t:'info', msg: `👑 目的地に最も肉薄した最優秀ルートを最終採用しました！`});
 
-  independentChains.forEach(ch => {
-    if (!ch.points || ch.points.length === 0) return;
-    const dHead = haversine(startCoord, ch.points[0]);
-    const dTail = haversine(startCoord, ch.points[ch.points.length - 1]);
-    if (dHead < minStartDist) { minStartDist = dHead; currentChainObj = ch; isReversedStart = false; }
-    if (dTail < minStartDist) { minStartDist = dTail; currentChainObj = ch; isReversedStart = true; }
-  });
+  let finalRoute = bestCandidate.route;
 
-  if (!currentChainObj) currentChainObj = independentChains[0];
-
-  log.push({t:'info', msg: `【起点確定】始点駅から最も近い [ChainID: ${currentChainObj.chainId}] (Rel: ${currentChainObj.relId}) を主軸に選択。駅との距離: ${Math.round(minStartDist)}m`});
-
-  let finalRoute = currentChainObj.points.slice();
-  if (isReversedStart) finalRoute.reverse();
-
-  independentChains = independentChains.filter(ch => ch.chainId !== currentChainObj.chainId);
-
-  let extended = true;
-  const REL_CONNECT_THRESHOLD = 500.0; // 駅構内ギャップ許容
-
-  while (extended && independentChains.length > 0) {
-    extended = false;
-    if (finalRoute.length === 0) break;
-    const currentTail = finalRoute[finalRoute.length - 1];
-
-    let nextChainObj = null;
-    let minGap = REL_CONNECT_THRESHOLD;
-    let isReversedNext = false;
-    let targetIndex = -1;
-
-    for (let i = 0; i < independentChains.length; i++) {
-      const ch = independentChains[i];
-      if (!ch.points || ch.points.length === 0) continue;
-      
-      const dHead = haversine(currentTail, ch.points[0]);
-      const dTail = haversine(currentTail, ch.points[ch.points.length - 1]);
-
-      if (dHead < minGap) { minGap = dHead; nextChainObj = ch; isReversedNext = false; targetIndex = i; }
-      if (dTail < minGap) { minGap = dTail; nextChainObj = ch; isReversedNext = true; targetIndex = i; }
-    }
-
-    if (nextChainObj && targetIndex !== -1) {
-      let nextPoints = nextChainObj.points.slice();
-      if (isReversedNext) nextPoints.reverse();
-      
-      finalRoute = finalRoute.concat(nextPoints.slice(1));
-      log.push({t:'info', msg: `🔗 Chain接続成功: [Chain:${currentChainObj.chainId} (Rel:${currentChainObj.relId})] ➔ [Chain:${nextChainObj.chainId} (Rel:${nextChainObj.relId})] (ギャップ距離: ${Math.round(minGap)}m)`});
-      
-      currentChainObj = nextChainObj;
-      independentChains.splice(targetIndex, 1);
-      extended = true;
-    }
-  }
-
+  // 常に「始点駅側」から「終点駅側」への並び順になるよう整合性を整える
   if (finalRoute.length >= 2) {
     const startDist = haversine(startCoord, finalRoute[0]);
     const endDist = haversine(startCoord, finalRoute[finalRoute.length - 1]);
@@ -499,14 +541,6 @@ function stitchWays(ways, startCoord, endCoord, log) {
       finalRoute.reverse();
     }
   }
-
-  try {
-    if (finalRoute.length > 0) {
-      const nStart = findNearestStationName(finalRoute[0]);
-      const nEnd = findNearestStationName(finalRoute[finalRoute.length - 1]);
-      log.push({t:'info', msg: `🏁 ルート結合完了: 端点1最寄=${nStart} / 端点2最寄=${nEnd}`});
-    }
-  } catch(e) {}
 
   log.push({t:'info', msg: `最終描画点数: ${finalRoute.length}`});
   return finalRoute;
