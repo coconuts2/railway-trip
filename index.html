@@ -366,14 +366,30 @@ function stitchWays(wayElements, startCoord, endCoord, gap=STITCH_GAP){
   }
 
   // 始点・終点に最も近い点で切り詰め
-  let sIdx=0,sD=Infinity, eIdx=chain.length-1,eD=Infinity;
-  chain.forEach((pt,i)=>{
-    const ds=haversine(startCoord,pt), de=haversine(endCoord,pt);
-    if(ds<sD){sD=ds;sIdx=i;}
-    if(de<eD){eD=de;eIdx=i;}
-  });
-  let lo=Math.min(sIdx,eIdx), hi=Math.max(sIdx,eIdx);
-  let result=chain.slice(lo,hi+1);
+// 1. 富山駅〜高岡駅の「直線距離」をあらかじめ計算しておく
+const totalStationDist = haversine(startCoord, endCoord);
+
+// 2. できた鎖（chain）の中から、乗車駅・降車駅の「どちらからも遠すぎる点」を排除する
+let result = chain.filter(pt => {
+  const dStart = haversine(startCoord, pt); // 乗車駅（富山）からの距離
+  const dEnd = haversine(endCoord, pt);     // 降車駅（高岡）からの距離
+  
+  // 補正マージン（駅の前後500m(0.5km)の猶予を持たせる）
+  const margin = 0.5; 
+  
+  // 点が「富山駅〜高岡駅の範囲内」に収まっているか判定
+  // 富山からの距離、または高岡からの距離が、駅間距離より明らかに大きい場合は「はみ出し」とみなす
+  return (dStart <= totalStationDist + margin) && (dEnd <= totalStationDist + margin);
+});
+
+// 3. 地理的な並び順（乗車駅 → 降車駅）になるように配列の方向を整える
+if (result.length >= 2) {
+  const startDist = haversine(startCoord, result[0]);
+  const endDist = haversine(startCoord, result[result.length - 1]);
+  if (startDist > endDist) {
+    result.reverse(); // 逆向きに繋がっていたら反転させる
+  }
+}
   if(sIdx>eIdx) result.reverse();
   return {coords: result.length>=2?result:chain, startGap:sD, endGap:eD, usedWays:used.filter(Boolean).length, totalWays:segments.length};
 }
