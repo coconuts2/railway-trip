@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>12日間 鉄道旅行ルートマップ</title>
+<title>鉄道旅行ルートマップ</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -11,19 +11,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #app{display:flex;flex-direction:column;height:100vh;}
 #header{padding:7px 14px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
 #header h1{font-size:13px;font-weight:600;color:#222;}
-#status-bar{font-size:11px;color:#888;margin-left:auto;display:flex;align-items:center;gap:6px;}
-#progress{width:100px;height:5px;background:#eee;border-radius:3px;overflow:hidden;}
+#status-bar{font-size:11px;color:#888;margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+#progress{width:90px;height:5px;background:#eee;border-radius:3px;overflow:hidden;}
 #progress-fill{height:100%;background:#534AB7;width:0%;transition:width 0.3s;}
-#cache-btn{background:#f0f0f0;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:10px;color:#666;}
-#cache-btn:hover{background:#e0e0e0;}
+.hbtn{background:#f0f0f0;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:10px;color:#555;white-space:nowrap;}
+.hbtn:hover{background:#e3e3e3;}
 #main{display:flex;flex:1;min-height:0;}
-#map{flex:1;min-width:0;}
-#panel{width:278px;min-width:278px;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;font-size:12px;position:relative;}
+#map{flex:1;min-width:0;background:#eef0f2;}
+#panel{width:280px;min-width:280px;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;font-size:12px;position:relative;}
 #ph{padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:2;}
 #ph h2{font-size:12px;font-weight:600;color:#222;}
 #ph p{margin-top:2px;font-size:10px;color:#888;}
 .day-block{border-bottom:1px solid #eee;}
-.day-label{padding:4px 12px;font-size:11px;font-weight:600;color:#555;background:#f8f8f5;display:flex;justify-content:space-between;}
+.day-label{padding:4px 12px;font-size:11px;font-weight:600;color:#555;background:#f8f8f5;}
 .seg-row{padding:5px 30px 5px 16px;cursor:pointer;border-top:1px solid #f0f0f0;position:relative;}
 .seg-row:hover{background:#f5f5f0;}
 .seg-row.active{background:#eef4ff;outline:2px solid #4477cc;outline-offset:-2px;}
@@ -32,8 +32,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .seg-time{color:#666;font-size:10px;margin-top:1px;}
 .seg-note{color:#888;font-size:10px;margin-top:1px;line-height:1.4;}
 .warn{color:#c84800;}
-.seg-icon{position:absolute;right:6px;top:6px;font-size:10px;line-height:1;}
-#det{display:none;position:absolute;top:0;right:0;width:278px;height:100%;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;z-index:20;box-shadow:-3px 0 10px rgba(0,0,0,0.08);}
+.seg-icon{position:absolute;right:6px;top:6px;font-size:10px;line-height:1;cursor:help;}
+#det{display:none;position:absolute;top:0;right:0;width:280px;height:100%;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;z-index:20;box-shadow:-3px 0 10px rgba(0,0,0,0.08);}
 #det-head{display:flex;align-items:flex-start;gap:6px;padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:3;}
 #det-title{font-size:11px;font-weight:600;color:#222;flex:1;line-height:1.4;}
 #det-close{background:#f0f0f0;border:none;border-radius:5px;padding:2px 7px;cursor:pointer;font-size:11px;color:#555;flex-shrink:0;}
@@ -48,25 +48,83 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #legend{display:flex;flex-wrap:wrap;gap:7px;padding:5px 12px;background:#fff;border-top:1px solid #e0e0e0;font-size:11px;flex-shrink:0;}
 .leg-item{display:flex;align-items:center;gap:4px;color:#555;}
 .leg-line{width:18px;height:3px;border-radius:2px;}
-/* レスポンシブ対応 */
+/* ログウィンドウ */
+#log-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;}
+#log-win{position:absolute;top:5%;left:50%;transform:translateX(-50%);width:90%;max-width:900px;height:85%;background:#fff;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,0.3);display:flex;flex-direction:column;overflow:hidden;}
+#log-head{display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid #e0e0e0;background:#fafafa;}
+#log-head h2{font-size:14px;font-weight:600;color:#222;flex:1;}
+#log-filter{font-size:11px;padding:3px 6px;border:1px solid #ccc;border-radius:4px;margin-right:8px;}
+#log-body{flex:1;overflow-y:auto;padding:0;font-family:'SF Mono',Consolas,'Courier New',monospace;font-size:11px;}
+.log-seg{border-bottom:1px solid #eee;}
+.log-seg-head{padding:7px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;background:#fff;}
+.log-seg-head:hover{background:#f5f5f5;}
+.log-seg-head.ok{border-left:3px solid #1a9e75;}
+.log-seg-head.fallback{border-left:3px solid #e08800;}
+.log-seg-head.error{border-left:3px solid #d04545;}
+.log-seg-status{font-size:13px;}
+.log-seg-name{font-weight:600;color:#333;flex:1;font-family:-apple-system,sans-serif;}
+.log-seg-time{color:#999;font-size:10px;}
+.log-detail{display:none;padding:8px 14px 12px 28px;background:#fafafa;color:#444;line-height:1.7;white-space:pre-wrap;}
+.log-detail.open{display:block;}
+.log-step{color:#666;}
+.log-step b{color:#222;}
+.log-ok{color:#1a7d56;}
+.log-warn{color:#c47800;}
+.log-err{color:#c03030;}
+#log-summary{padding:8px 14px;background:#f0f4ff;border-bottom:1px solid #dde;font-family:-apple-system,sans-serif;font-size:12px;color:#334;}
+/* ファイル読込画面 */
+#loader-screen{position:fixed;inset:0;background:#f5f6f8;z-index:2000;display:flex;align-items:center;justify-content:center;}
+#loader-box{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.1);padding:32px 40px;max-width:480px;text-align:center;}
+#loader-box h1{font-size:18px;color:#222;margin-bottom:8px;}
+#loader-box p{font-size:13px;color:#777;line-height:1.7;margin-bottom:20px;}
+#drop-zone{border:2px dashed #ccc;border-radius:10px;padding:30px 20px;cursor:pointer;transition:all 0.2s;margin-bottom:14px;}
+#drop-zone:hover,#drop-zone.dragover{border-color:#534AB7;background:#f8f7ff;}
+#drop-zone .icon{font-size:36px;margin-bottom:8px;}
+#drop-zone .txt{font-size:13px;color:#555;}
+#drop-zone .sub{font-size:11px;color:#aaa;margin-top:4px;}
+.loader-btn{background:#534AB7;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:13px;cursor:pointer;margin:4px;}
+.loader-btn:hover{background:#433a9e;}
+.loader-btn.alt{background:#eee;color:#555;}
+.loader-btn.alt:hover{background:#e0e0e0;}
+#loader-err{color:#c03030;font-size:12px;margin-top:10px;min-height:16px;}
 @media (max-width:768px){
   #main{flex-direction:column;}
-  #panel{width:100%;min-width:0;border-left:none;border-top:1px solid #e0e0e0;height:40vh;overflow-y:auto;}
+  #panel{width:100%;min-width:0;border-left:none;border-top:1px solid #e0e0e0;height:40vh;}
   #map{height:60vh;flex:none;}
-  #det{width:100%;height:40vh;top:auto;bottom:0;}
-  #header h1{font-size:12px;}
+  #det{width:100%;height:50vh;top:auto;bottom:0;}
 }
 </style>
 </head>
 <body>
-<div id="app">
+
+<!-- ファイル読込画面 -->
+<div id="loader-screen">
+  <div id="loader-box">
+    <h1>🚄 鉄道旅行ルートマップ</h1>
+    <p>旅程データ（itinerary.json）を読み込んでください。<br>地図上にルートを描画します。</p>
+    <div id="drop-zone">
+      <div class="icon">📁</div>
+      <div class="txt">クリックして選択 / ドラッグ&ドロップ</div>
+      <div class="sub">itinerary.json</div>
+    </div>
+    <input type="file" id="file-input" accept=".json,application/json" style="display:none">
+    <div>
+      <button class="loader-btn alt" onclick="tryAutoLoad()">同じ階層の itinerary.json を自動読込</button>
+    </div>
+    <div id="loader-err"></div>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
 <div id="header">
-  <h1>🚄 12日間 近畿・中国・四国・九州 鉄道旅行ルートマップ</h1>
+  <h1 id="trip-title">🚄 鉄道旅行ルートマップ</h1>
   <div id="status-bar">
-    <span id="status-text">読み込み中...</span>
+    <span id="status-text">準備中...</span>
     <div id="progress"><div id="progress-fill"></div></div>
-    <span id="progress-label">0/?</span>
-    <button id="cache-btn" onclick="clearCache()" title="キャッシュをクリアして再取得">🗑 キャッシュ削除</button>
+    <span id="progress-label">0/0</span>
+    <button class="hbtn" onclick="openLog()">📋 ログ</button>
+    <button class="hbtn" onclick="clearCache()">🗑 キャッシュ削除</button>
+    <button class="hbtn" onclick="reload()">📁 別データ</button>
   </div>
 </div>
 <div id="main">
@@ -82,16 +140,36 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 </div>
 <div id="legend"></div>
 </div>
+
+<!-- ログウィンドウ -->
+<div id="log-overlay" onclick="if(event.target===this)closeLog()">
+  <div id="log-win">
+    <div id="log-head">
+      <h2>📋 取得ログ</h2>
+      <select id="log-filter" onchange="renderLog()">
+        <option value="all">すべて表示</option>
+        <option value="ok">API成功のみ</option>
+        <option value="fallback">fallback採用のみ</option>
+        <option value="error">エラーのみ</option>
+      </select>
+      <button class="hbtn" onclick="closeLog()">✕ 閉じる</button>
+    </div>
+    <div id="log-summary"></div>
+    <div id="log-body"></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// 定数
+// 設定
 // =====================================================================
-const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7日間キャッシュ
-const CONCURRENCY = 1; // シリアル実行（429・フリーズ回避）
-const REQUEST_INTERVAL = 2000; // リクエスト間隔 2秒
-const RETRY_WAIT = 30000; // 429時の待機時間 30秒
-const MAX_RETRY = 3; // 最大リトライ回数
+const CACHE_TTL = 7*24*60*60*1000;
+const REQUEST_INTERVAL = 2000;
+const RETRY_WAIT = 30000;
+const MAX_RETRY = 3;
+const STITCH_GAP = 1000;       // way連結の最大ギャップ(m)
+const NEAR_STATION = 800;      // 端点が駅とみなせる距離(m)
 const ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter",
@@ -108,845 +186,568 @@ const T = {
   plane:{label:'飛行機',color:'#3C3489',dash:'2,6',w:4},
 };
 
-const DAY_LABELS = [
-  "1日目 8/7（金）","2日目 8/8（土）","3日目 8/9（日）","4日目 8/11（火）",
-  "5日目 8/12（水）","6日目 8/13（木）","7日目 8/14（金）","8日目 8/15（土）",
-  "9日目 8/16（日）","10日目 8/17（月）","11日目 8/18（火）","12日目 8/19（水）"
-];
+// グローバル状態
+let SEGS = [];
+let DAY_LABELS = [];
+let map = null;
+const plMap = {};
+let activePl = null, activeRow = null;
+const LOG = {}; // key -> ログオブジェクト
 
 // =====================================================================
-// 行程データ
-// fromName/toName: 駅名（OSM検索用）
-// bbox: [S,W,N,E] — 路線が収まる最小bbox
-// railTag: "rail" | "tram" | "light_rail"
-// fallback: フォールバック座標列 [lat,lon][]
+// ファイル読み込み
 // =====================================================================
-const SEGS = [
-// ── Day 1 ──
-{di:0,si:0,type:"shinkansen",name:"北陸新幹線 かがやき513号",from:"東京",dep:"17:24",to:"富山",arr:"19:35",note:"2時間11分",
- detail:{tip:"北陸新幹線の最速達列車。E7/W7系使用。"},
- fromName:"東京",toName:"富山",
- fallbackSkip:true,
- fallback:[[35.681,139.767],[36.012,138.367],[36.594,137.529],[36.702,137.213]]},
-{di:0,si:1,type:"local",name:"富山地鉄環状線（路面電車）",from:"富山駅",dep:"19:40",to:"大手モール",arr:"19:48",note:"8分",
- detail:{tip:"富山駅新幹線コンコースから直結。ICカード利用可。"},
- fallbackSkip:true,
- fallback:[[36.7014,137.2131],[36.7022,137.2153]]},
-// ── Day 2 ──
-{di:1,si:0,type:"tokkyu",name:"あいの風とやま鉄道 普通",from:"富山",dep:"09:05",to:"高岡",arr:"09:25",note:"20分",
- detail:{tip:"旧JR北陸本線を引き継いだ第三セクター。"},
- fromName:"富山",toName:"高岡",
- lineNames:["あいの風とやま鉄道線"],
- fallback:[[36.7014,137.2131],[36.7409,137.0153]]},
-{di:1,si:1,type:"kanko",name:"JR城端線 快速 べるもんた51号",from:"高岡",dep:"09:38",to:"福光",arr:"10:21",note:"⚠全車指定・発売日10:00即完売注意",warn:true,
- detail:{warn:"発売日（乗車1ヶ月前10:00）はほぼ即完売。「10時打ち」での予約が必須。",tip:"越中の山里を走る観光列車。庄川峡の景色が絶品。",info:"べるもんた＝「美しい山と海」の略。土日祝のみ運行。"},
- fromName:"高岡",toName:"福光",
- lineNames:["城端線"],
- fallback:[[36.7409,137.0153],[36.6832,136.9681],[36.5842,136.870]]},
-{di:1,si:2,type:"bus",name:"加越能バス 南砺・金沢線",from:"福光駅",dep:"10:21",to:"金沢駅西口",arr:"11:15",note:"54分",
- detail:{tip:"現金準備推奨。金沢駅西口（Rinto側）着。"},
- fallbackSkip:true,
- fallback:[[36.5842,136.870],[36.5781,136.6482]]},
-{di:1,si:3,type:"tokkyu",name:"IRいしかわ鉄道→JR七尾線",from:"金沢",dep:"11:32",to:"七尾",arr:"12:58",note:"1時間26分",
- detail:{tip:"能登の里山海道の車窓が楽しめる。"},
- fromName:"金沢",toName:"七尾",
- lineNames:["IRいしかわ鉄道線", "七尾線", "JR七尾線"],
- fallback:[[36.5781,136.6482],[36.6320,136.7234],[36.8989,136.7763],[37.0416,136.9645]]},
-{di:1,si:4,type:"tokkyu",name:"JR七尾線→のと鉄道直通",from:"七尾",dep:"13:15",to:"穴水",arr:"13:52",note:"のと鉄道区間直通・37分",
- detail:{tip:"穴水駅隣の道の駅「さくら駅」で能登の地物や牡蠣のお土産購入が可能。",warn:"震災復旧状況により運行変更の可能性あり。事前確認必須。"},
- fromName:"七尾",toName:"穴水",
- lineNames:["七尾線", "のと鉄道七尾線", "JR七尾線"],
- fallback:[[37.0416,136.9645],[37.0179,136.9122],[37.228,136.9046]]},
-{di:1,si:5,type:"tokkyu",name:"のと鉄道七尾線 普通",from:"穴水",dep:"15:12",to:"和倉温泉",arr:"15:41",note:"折り返し・29分",
- detail:{tip:"和倉温泉は加賀屋をはじめとする高級旅館が並ぶ名湯。"},
- fromName:"穴水",toName:"和倉温泉",
- lineNames:["のと鉄道七尾線", "七尾線"],
- fallback:[[37.228,136.9046],[37.0416,136.9645],[37.0747,136.9259]]},
-{di:1,si:6,type:"kanko",name:"JR七尾線 特急 花嫁のれん4号",from:"和倉温泉",dep:"17:09",to:"金沢",arr:"18:27",note:"⚠全車指定・発売日即完売",warn:true,
- detail:{warn:"発売日10:00即完売。「10時打ち」必須。特急券＋乗車券をセットで購入。",tip:"輪島塗・加賀友禅をテーマにした豪華観光特急。車内販売あり。",info:"1〜4号車の全車指定席。"},
- fromName:"和倉温泉",toName:"金沢",
- lineNames:["七尾線", "JR七尾線"],
- fallback:[[37.0747,136.9259],[37.0416,136.9645],[36.8989,136.7763],[36.6320,136.7234],[36.5781,136.6482]]},
-{di:1,si:7,type:"shinkansen",name:"JR北陸新幹線",from:"金沢",dep:"19:55",to:"福井",arr:"20:21",note:"26分",
- detail:{tip:"2024年3月延伸開業の新区間。W7系使用。"},
- fromName:"金沢",toName:"福井",
- fallbackSkip:true,
- fallback:[[36.5781,136.6482],[36.3900,136.3710],[36.0621,136.2235]]},
-{di:1,si:8,type:"bus",name:"福井鉄道福武線 普通",from:"福井駅",dep:"20:33",to:"福井城址大名町",arr:"20:38",note:"5分",
- detail:{tip:"ICカード利用可。"},
- fallbackSkip:true,
- fallback:[[36.0621,136.2235],[36.0625,136.2205]]},
-// ── Day 3 ──
-{di:2,si:0,type:"shinkansen",name:"JR北陸新幹線 つるぎ19号",from:"福井",dep:"11:41",to:"敦賀",arr:"12:02",note:"21分",
- detail:{tip:"各駅停車タイプ「つるぎ」。敦賀でサンダーバードに乗換。"},
- fromName:"福井",toName:"敦賀",
- fallbackSkip:true,
- fallback:[[36.0621,136.2235],[35.6448,136.0765]]},
-{di:2,si:1,type:"tokkyu",name:"特急 サンダーバード20号",from:"敦賀",dep:"12:14",to:"大阪",arr:"13:36",note:"1時間22分（湖西線経由）",
- detail:{tip:"指定席の事前予約推奨。琵琶湖西岸の景色が美しい。"},
- fromName:"敦賀",toName:"大阪",
- fallbackSkip:true,
- fallback:[[35.6448,136.0765],[35.501,135.954],[35.2156,135.9098],[34.9863,135.8194],[34.7025,135.496]]},
-{di:2,si:2,type:"bus",name:"Osaka Metro御堂筋線",from:"梅田",dep:"13:36",to:"淀屋橋",arr:"13:39",note:"⚠乗換0分・実質1本後で",warn:true,
- detail:{warn:"実質1本遅らせる必要あり。淀屋橋での1.5時間待機があるため致命傷にはならない。"},
- fallbackSkip:true,
- fallback:[[34.7025,135.496],[34.6934,135.5013]]},
-{di:2,si:3,type:"tokkyu",name:"京阪本線特急",from:"淀屋橋",dep:"15:12",to:"出町柳",arr:"16:06",note:"1.5時間休憩後・54分",
- detail:{tip:"プレミアムカー（有料）で快適移動も可。"},
- fromName:"淀屋橋",toName:"出町柳",
- lineNames:["京阪本線"],
- fallback:[[34.6934,135.5013],[34.744,135.576],[34.984,135.755],[35.0274,135.7726]]},
-{di:2,si:4,type:"local",name:"叡山電鉄叡山本線",from:"出町柳",dep:"16:07",to:"八瀬比叡山口",arr:"16:21",note:"⚠乗換1分・ダッシュ必須",warn:true,
- detail:{warn:"地下ホームから地上ホームまで1分半〜2分。1本遅らせることも検討を。"},
- fromName:"出町柳",toName:"八瀬比叡山口",
- lineNames:["叡山電鉄叡山本線", "叡山本線"],
- fallback:[[35.0274,135.7726],[35.0768,135.8062]]},
-{di:2,si:5,type:"local",name:"叡山ケーブル",from:"ケーブル八瀬",dep:"16:30",to:"ケーブル比叡",arr:"16:39",note:"9分",
- detail:{tip:"高低差561m・傾斜25度の急勾配。"},
- fallbackSkip:true,
- fallback:[[35.078,135.8098],[35.081,135.843]]},
-{di:2,si:6,type:"local",name:"叡山ロープウェイ",from:"ロープ比叡",dep:"16:45",to:"比叡山頂",arr:"16:48",note:"3分",
- detail:{tip:"山頂から360度の絶景。"},
- fallbackSkip:true,
- fallback:[[35.081,135.840],[35.0815,135.843]]},
-{di:2,si:7,type:"bus",name:"京阪バス[57]（比叡山内）",from:"比叡山頂",dep:"17:05",to:"無動寺",arr:"17:13",note:"山内バス8分",
- detail:{tip:"本数少なめ。乗り遅れ厳禁。"},
- fallbackSkip:true,
- fallback:[[35.0815,135.843],[35.074,135.848]]},
-{di:2,si:8,type:"local",name:"坂本ケーブル",from:"ケーブル延暦寺",dep:"17:30",to:"ケーブル坂本",arr:"17:41",note:"日本一長いケーブルカー・11分",
- detail:{tip:"全長2,025mの日本最長ケーブルカー。紅葉の名所。"},
- fallbackSkip:true,
- fallback:[[35.074,135.848],[35.0673,135.858]]},
-{di:2,si:9,type:"bus",name:"江若交通[41]",from:"ケーブル坂本駅",dep:"17:50",to:"坂本比叡山口駅",arr:"17:53",note:"路線バス3分",
- detail:{warn:"バス到着から京阪電車まで1分しかない。渋滞で遅れるとアウト。"},
- fallbackSkip:true,
- fallback:[[35.068,135.858],[35.0673,135.860]]},
-{di:2,si:10,type:"local",name:"京阪石山坂本線",from:"坂本比叡山口",dep:"17:54",to:"びわ湖浜大津",arr:"18:10",note:"⚠バスから1分乗換・16分",warn:true,
- detail:{warn:"バス降車から1分。走って乗り場へ向かう必要あり。"},
- fromName:"坂本比叡山口",toName:"びわ湖浜大津",
- lineNames:["石山坂本線", "京阪石山坂本線"],
- fallback:[[35.0673,135.860],[35.0096,135.8494]]},
-{di:2,si:11,type:"local",name:"京阪京津線（地下鉄直通）",from:"びわ湖浜大津",dep:"18:17",to:"烏丸御池",arr:"18:44",note:"急勾配・地下直通・27分",
- detail:{tip:"路面電車が地下鉄に直通する世界でも珍しい路線。最大勾配61‰。"},
- fromName:"びわ湖浜大津",toName:"烏丸御池",
- lineNames:["京津線", "京阪京津線"],
- fallback:[[35.0096,135.8494],[34.9863,135.8194],[35.0113,135.7681]]},
-{di:2,si:12,type:"bus",name:"京都市営地下鉄烏丸線",from:"烏丸御池",dep:"18:46",to:"京都",arr:"18:52",note:"6分",
- detail:{tip:"2駅。新幹線乗場まで徒歩5〜8分。"},
- fallbackSkip:true,
- fallback:[[35.0113,135.7681],[34.9858,135.7588]]},
-{di:2,si:13,type:"shinkansen",name:"JR東海道新幹線 のぞみ50号",from:"京都",dep:"19:21",to:"東京",arr:"21:33",note:"一時帰宅・2時間12分",
- detail:{tip:"3日間の余韻を楽しみながら帰宅。"},
- fromName:"京都",toName:"東京",
- fallbackSkip:true,
- fallback:[[34.9858,135.7588],[35.1709,136.8815],[35.388,137.154],[35.6812,139.7671]]},
-// ── Day 4 ──
-{di:3,si:0,type:"shinkansen",name:"JR東海道新幹線 のぞみ271号",from:"東京",dep:"17:00",to:"名古屋",arr:"18:39",note:"1時間39分",
- detail:{tip:"N700S系使用。夕方出発でゆっくり準備できる。"},
- fromName:"東京",toName:"名古屋",
- fallbackSkip:true,
- fallback:[[35.6812,139.7671],[35.388,137.154],[35.1709,136.8815]]},
-{di:3,si:1,type:"kanko",name:"近鉄名阪特急 ひのとり",from:"近鉄名古屋",dep:"19:00",to:"大和八木",arr:"20:37",note:"プレミアム車両強く推奨・1h37m",
- detail:{tip:"プレミアム車両はバックシェル付き電動リクライニングで日本最高峰。全席コンセント付き。",info:"【お得】近鉄特急券は30分以内乗継で「乗継特急券」として1枚に合算でき割安。名古屋から奈良まで通しで購入すること。"},
- fromName:"近鉄名古屋",toName:"大和八木",
- fallbackSkip:true,
- fallback:[[35.170,136.881],[34.7342,136.5105],[34.5242,135.739],[34.5179,135.7946]]},
-{di:3,si:2,type:"tokkyu",name:"近鉄橿原線特急",from:"大和八木",dep:"20:58",to:"大和西大寺",arr:"21:13",note:"全車指定・15分",
- detail:{tip:"次の奈良線特急に対面乗換するため座席位置を確認しておくと良い。"},
- fromName:"大和八木",toName:"大和西大寺",
- lineNames:["近鉄橿原線", "橿原線"],
- fallback:[[34.5179,135.7946],[34.6722,135.7851]]},
-{di:3,si:3,type:"tokkyu",name:"近鉄難波・奈良線特急",from:"大和西大寺",dep:"21:13",to:"近鉄奈良",arr:"21:18",note:"⚠対面0分乗換・5分",warn:true,
- detail:{tip:"同一ホームの向かい側への対面乗換。ドアを出てすぐ向かいのドアへ。"},
- fromName:"大和西大寺",toName:"近鉄奈良",
- lineNames:["近鉄奈良線", "奈良線", "近鉄難波線", "難波線"],
- fallback:[[34.6722,135.7851],[34.6842,135.8275]]},
-// ── Day 5 ──
-{di:4,si:0,type:"tokkyu",name:"近鉄奈良線 特急ひのとり",from:"近鉄奈良",dep:"08:00",to:"大阪難波",arr:"08:41",note:"41分",
- detail:{tip:"朝の近鉄奈良線特急。大阪難波へ直通。"},
- fromName:"近鉄奈良",toName:"大阪難波",
- lineNames:["近鉄奈良線", "奈良線"],
- fallback:[[34.6842,135.8275],[34.6722,135.7851],[34.6665,135.5012]]},
-{di:4,si:1,type:"tokkyu",name:"南海高野線 特急こうや1号",from:"なんば",dep:"10:00",to:"極楽橋",arr:"11:31",note:"1時間31分",
- detail:{tip:"橋本以南は急峻な山間部。渓谷美が見所。特急券要。",info:"なんばで約1時間20分の待機あり。周辺で朝食・観光に活用可。"},
- fromName:"なんば",toName:"極楽橋",
- lineNames:["南海高野線", "高野線"],
- fallback:[[34.6665,135.5012],[34.5831,135.4895],[34.4782,135.566],[34.3182,135.6148],[34.2531,135.607],[34.2344,135.5821]]},
-{di:4,si:2,type:"local",name:"高野山ケーブル（上山）",from:"極楽橋",dep:"11:42",to:"高野山",arr:"11:47",note:"5分",
- detail:{tip:"高野山への唯一のアクセス。",warn:"滞在1時間では実質駅周辺のみ。"},
- fallbackSkip:true,
- fallback:[[34.2344,135.5821],[34.2278,135.5776]]},
-{di:4,si:3,type:"local",name:"高野山ケーブル（下山）",from:"高野山",dep:"12:58",to:"極楽橋",arr:"13:03",note:"5分",
- detail:{tip:"超短時間滞在（1時間）。ごま豆腐などお土産は駅前で。"},
- fallbackSkip:true,
- fallback:[[34.2278,135.5776],[34.2344,135.5821]]},
-{di:4,si:4,type:"local",name:"南海高野線 各停",from:"極楽橋",dep:"13:16",to:"橋本",arr:"13:56",note:"40分",
- detail:{tip:"山岳区間を下る各駅停車。橋本でJR和歌山線に乗換。"},
- fromName:"極楽橋",toName:"橋本",
- lineNames:["南海高野線", "高野線"],
- fallback:[[34.2344,135.5821],[34.2531,135.607],[34.3182,135.6148]]},
-{di:4,si:5,type:"tokkyu",name:"JR和歌山線 普通",from:"橋本",dep:"14:07",to:"吉野口",arr:"14:42",note:"35分",
- detail:{tip:"近鉄吉野線乗換駅の吉野口へ。"},
- fromName:"橋本",toName:"吉野口",
- lineNames:["和歌山線", "JR和歌山線"],
- fallback:[[34.3182,135.6148],[34.3701,135.679],[34.4207,135.7503]]},
-{di:4,si:6,type:"local",name:"近鉄南大阪・吉野線 普通",from:"吉野口",dep:"14:48",to:"吉野",arr:"15:18",note:"30分",
- detail:{tip:"終点手前から吉野山の山腹が広がる絶景。"},
- fromName:"吉野口",toName:"吉野",
- lineNames:["近鉄吉野線", "吉野線"],
- fallback:[[34.4207,135.7503],[34.3901,135.7976],[34.3768,135.8535]]},
-{di:4,si:7,type:"kanko",name:"近鉄 観光特急 青の交響曲",from:"吉野",dep:"16:03",to:"大阪阿部野橋",arr:"17:22",note:"1時間19分",
- detail:{tip:"ラウンジカーで地ビールや吉野クラフトジンを楽しみながらの移動が醍醐味。全席指定。",info:"3両編成・ネイビーブルーで統一したレトロ近代風。週末中心に運行。"},
- fromName:"吉野",toName:"大阪阿部野橋",
- lineNames:["近鉄吉野線", "吉野線", "近鉄南大阪線", "南大阪線"],
- fallback:[[34.3768,135.8535],[34.4207,135.7503],[34.4782,135.566],[34.5831,135.4895],[34.6472,135.5132]]},
-{di:4,si:8,type:"bus",name:"Osaka Metro御堂筋線",from:"天王寺",dep:"17:22",to:"なんば",arr:"17:28",note:"6分",
- detail:{tip:"天王寺〜なんばは地下鉄御堂筋線で2駅。"},
- fallbackSkip:true,
- fallback:[[34.6472,135.5132],[34.6665,135.5012]]},
-// ── Day 6 ──
-{di:5,si:0,type:"tokkyu",name:"南海本線 特急サザン13号",from:"なんば",dep:"10:20",to:"和歌山市",arr:"11:18",note:"58分",
- detail:{tip:"指定席は特急券要。一部車両は自由席。",info:"和歌山市駅からJR和歌山駅まで徒歩約10分。"},
- fromName:"なんば",toName:"和歌山市",
- lineNames:["南海本線"],
- fallback:[[34.6665,135.5012],[34.5912,135.4789],[34.431,135.333],[34.2367,135.1667]]},
-{di:5,si:1,type:"local",name:"わかやま電鉄貴志川線（往路）",from:"和歌山",dep:"11:28",to:"貴志",arr:"12:00",note:"たま駅長で有名・32分",
- detail:{tip:"ニタマ駅長（たまの後継）が駅長。いちご電車・おもちゃ電車など個性的な車両が走る。",info:"貴志駅での折り返しまで8分。猫型駅舎を撮影したらすぐ乗車。"},
- fromName:"和歌山",toName:"貴志",
- lineNames:["貴志川線", "和歌山電鐵貴志川線", "わかやま電鉄貴志川線"],
- fallback:[[34.2322,135.1918],[34.258,135.251],[34.287,135.3108],[34.301,135.3461]]},
-{di:5,si:2,type:"local",name:"わかやま電鉄貴志川線（折返）",from:"貴志",dep:"12:08",to:"伊太祈曽",arr:"12:20",note:"8分滞在後・12分",
- detail:{tip:"伊太祁曽神社（木の神様）が徒歩5分。"},
- fromName:"貴志",toName:"伊太祈曽",
- lineNames:["貴志川線", "和歌山電鐵貴志川線"],
- fallback:[[34.301,135.3461],[34.287,135.3108]]},
-{di:5,si:3,type:"local",name:"わかやま電鉄貴志川線（帰路）",from:"伊太祈曽",dep:"12:50",to:"和歌山",arr:"13:10",note:"30分待機後・20分",
- detail:{warn:"この旅最大の勝負どころ。わかやま電鉄9番線からJR特急ホーム（4・5番線）へ連絡改札を通る必要あり。"},
- fromName:"伊太祈曽",toName:"和歌山",
- lineNames:["貴志川線", "和歌山電鐵貴志川線"],
- fallback:[[34.287,135.3108],[34.258,135.251],[34.2322,135.1918]]},
-{di:5,si:4,type:"tokkyu",name:"JR紀勢本線 特急 くろしお11号",from:"和歌山",dep:"13:18",to:"紀伊勝浦",arr:"16:16",note:"2時間58分・太平洋沿いの絶景",
- detail:{tip:"進行方向右側（D席）を指定すると熊野灘・太平洋の海岸線が延々と楽しめる。",info:"紀伊勝浦は本まぐろの水揚げ基地。到着後の55分で駅前市場のマグロ丼・寿司を調達するのが最高。"},
- fromName:"和歌山",toName:"紀伊勝浦",
- fallbackSkip:true,
- fallback:[[34.2322,135.1918],[34.0564,135.1424],[33.7277,135.3648],[33.6853,135.3591],[33.4746,135.7851],[33.7255,135.9879],[33.6281,135.9418]]},
-{di:5,si:5,type:"tokkyu",name:"JR紀勢本線 特急 南紀8号",from:"紀伊勝浦",dep:"17:11",to:"四日市",arr:"20:15",note:"3時間4分・紀伊半島北上",
- detail:{tip:"進行方向右側（A席）を指定すると海岸線が楽しめる。",info:"車内で調達した勝浦マグロ寿司を食べながらの旅が最高。"},
- fromName:"紀伊勝浦",toName:"四日市",
- fallbackSkip:true,
- fallback:[[33.6281,135.9418],[33.8897,136.0988],[34.0743,136.1902],[34.5777,136.5274],[34.7342,136.5105],[34.963,136.6296]]},
-// ── Day 7 ──
-{di:6,si:0,type:"local",name:"あすなろう鉄道内部線（往路）",from:"あすなろう四日市",dep:"09:23",to:"内部",arr:"09:39",note:"ナローゲージ・16分",
- detail:{tip:"軌間762mmのナローゲージ。現役の762mm軌間鉄道は国内でも非常に希少。"},
- fromName:"あすなろう四日市",toName:"内部",
- lineNames:["内部線", "四日市あすなろう鉄道内部線"],
- fallback:[[34.963,136.6296],[34.9404,136.655]]},
-{di:6,si:1,type:"local",name:"あすなろう鉄道内部線（折返）",from:"内部",dep:"09:43",to:"日永",arr:"09:53",note:"10分",
- detail:{tip:"日永で八王子線に乗換。"},
- fromName:"内部",toName:"日永",
- lineNames:["内部線", "四日市あすなろう鉄道内部線"],
- fallback:[[34.9404,136.655],[34.949,136.6428]]},
-{di:6,si:2,type:"local",name:"あすなろう鉄道八王子線",from:"日永",dep:"09:54",to:"西日野",arr:"09:56",note:"⚠1分乗換・2分",warn:true,
- detail:{warn:"1分乗換。同じ構内だが階段の位置を事前確認しておくこと。"},
- fromName:"日永",toName:"西日野",
- lineNames:["八王子線", "四日市あすなろう鉄道八王子線"],
- fallback:[[34.949,136.6428],[34.945,136.629]]},
-{di:6,si:3,type:"local",name:"あすなろう鉄道八王子線（折返）",from:"西日野",dep:"10:02",to:"あすなろう四日市",arr:"10:11",note:"9分",
- detail:{tip:"折り返してJR四日市まで29分徒歩。"},
- lineNames:["八王子線", "四日市あすなろう鉄道八王子線"],
- fallback:[[34.945,136.629],[34.949,136.6428],[34.963,136.6296]]},
-{di:6,si:4,type:"tokkyu",name:"JR関西本線快速",from:"四日市",dep:"10:40",to:"亀山",arr:"11:07",note:"27分",
- detail:{tip:"亀山で非電化区間（キハ）に乗換。"},
- fromName:"四日市",toName:"亀山",
- lineNames:["関西本線", "JR関西本線"],
- fallback:[[34.963,136.6296],[34.8501,136.4505]]},
-{di:6,si:5,type:"tokkyu",name:"JR関西本線 普通（キハ気動車）",from:"亀山",dep:"11:14",to:"柘植",arr:"11:40",note:"非電化・26分",
- detail:{tip:"ディーゼルのキハ系気動車。静かな山間部を走るローカル色豊かな区間。",info:"亀山〜加茂間は本数が極めて少ない。乗り遅れ厳禁。"},
- fromName:"亀山",toName:"柘植",
- lineNames:["関西本線", "JR関西本線"],
- fallback:[[34.8501,136.4505],[34.847,136.2557]]},
-{di:6,si:6,type:"local",name:"JR草津線 普通（柘植→貴生川）",from:"柘植",dep:"12:01",to:"貴生川",arr:"12:18",note:"17分",
- detail:{tip:"信楽高原鐵道の乗換駅・貴生川（きぶかわ）へ。"},
- fromName:"柘植",toName:"貴生川",
- lineNames:["草津線", "JR草津線"],
- fallback:[[34.847,136.2557],[34.9522,136.1538]]},
-{di:6,si:7,type:"local",name:"信楽高原鐵道（往路）",from:"貴生川",dep:"12:24",to:"信楽",arr:"12:48",note:"24分",
- detail:{tip:"信楽焼・たぬきの産地を走るローカル線。ICカード不可。現金230円程度。",info:"信楽駅前に巨大なたぬきの像。"},
- fromName:"貴生川",toName:"信楽",
- lineNames:["信楽高原鐵道信楽線", "信楽線", "信楽高原鐵道"],
- fallback:[[34.9522,136.1538],[34.8771,136.0613]]},
-{di:6,si:8,type:"local",name:"信楽高原鐵道（折返）",from:"信楽",dep:"12:54",to:"貴生川",arr:"13:17",note:"23分",
- detail:{tip:"折り返して貴生川へ。その後JR草津線で草津→京都へ。"},
- lineNames:["信楽高原鐵道信楽線", "信楽線", "信楽高原鐵道"],
- fallback:[[34.8771,136.0613],[34.9522,136.1538]]},
-{di:6,si:9,type:"local",name:"JR草津線 普通（貴生川→草津）",from:"貴生川",dep:"13:22",to:"草津",arr:"13:47",note:"25分",
- detail:{tip:"草津でJR琵琶湖線に乗換え京都へ。"},
- fromName:"貴生川",toName:"草津",
- lineNames:["草津線", "JR草津線"],
- fallback:[[34.9522,136.1538],[35.0229,135.9627]]},
-{di:6,si:10,type:"tokkyu",name:"JR神戸・京都線 新快速",from:"草津",dep:"13:52",to:"京都",arr:"14:13",note:"21分・京都で2.5時間フリー",
- detail:{tip:"京都では約2時間半のフリータイム。錦市場や京都駅ビルでお土産・夕食を。",info:"京都駅THE CUBE（地下・11階）は食事・土産に最適。"},
- fromName:"草津",toName:"京都",
- fallbackSkip:true,
- fallback:[[35.0229,135.9627],[34.9858,135.7588]]},
-{di:6,si:11,type:"kanko",name:"近鉄京都線 特急 あをによし",from:"京都",dep:"16:50",to:"大阪難波",arr:"18:16",note:"1時間26分・プレミアム観光特急",
- detail:{tip:"ハイデッカー構造で眺望良好。車内販売でスイーツ・地酒を楽しめる。",info:"「あをによし」は万葉集の枕詞で奈良の意。1・2号車は「デラックス車両」でより豪華。"},
- fromName:"京都",toName:"大阪難波",
- lineNames:["近鉄京都線", "京都線"],
- fallback:[[34.9858,135.7588],[34.6722,135.7851],[34.6665,135.5012]]},
-{di:6,si:12,type:"tokkyu",name:"阪神なんば線 普通",from:"大阪難波",dep:"18:19",to:"尼崎",arr:"18:42",note:"⚠3分乗換・23分",warn:true,
- detail:{warn:"近鉄特急到着から3分で阪神なんば線が発車。早歩きが必要。前方車両に乗ると便利。"},
- fromName:"大阪難波",toName:"尼崎",
- lineNames:["阪神なんば線"],
- fallback:[[34.6665,135.5012],[34.6791,135.458],[34.716,135.401]]},
-{di:6,si:13,type:"tokkyu",name:"阪神本線直通特急",from:"尼崎",dep:"18:50",to:"山陽姫路",arr:"20:34",note:"1時間44分",
- detail:{tip:"神戸の街並み・明石海峡大橋方面の夜景が楽しめる。姫路まで乗換なし。"},
- fromName:"尼崎",toName:"山陽姫路",
- fallbackSkip:true,
- fallback:[[34.716,135.401],[34.6911,135.1954],[34.6535,134.9987],[34.8268,134.6909]]},
-// ── Day 8 ──
-{di:7,si:0,type:"shinkansen",name:"JR山陽新幹線 さくら753号",from:"姫路",dep:"11:50",to:"岡山",arr:"12:09",note:"19分",
- detail:{tip:"岡山で瀬戸大橋線に乗換え四国へ向かう。"},
- fromName:"姫路",toName:"岡山",
- fallbackSkip:true,
- fallback:[[34.8268,134.6909],[34.6661,133.9177]]},
-{di:7,si:1,type:"tokkyu",name:"JR瀬戸大橋線 特急 しおかぜ11号",from:"岡山",dep:"12:35",to:"松山",arr:"15:17",note:"瀬戸大橋を渡り四国へ・2h42m",
- detail:{tip:"瀬戸大橋上（約13分）は両側の瀬戸内海の島々が絶景。",info:"松山到着から17:42まで2時間25分のフリータイム。道後温泉入浴の絶好のチャンス。"},
- fromName:"岡山",toName:"松山",
- fallbackSkip:true,
- fallback:[[34.6661,133.9177],[34.4866,133.8281],[34.3266,133.8404],[34.2753,133.7524],[34.0619,132.999],[33.951,132.817],[33.840,132.7511]]},
-{di:7,si:2,type:"bus",name:"伊予鉄道市内線（路面電車）",from:"松山駅前",dep:"17:42",to:"大手町",arr:"17:44",note:"2分",
- detail:{tip:"大手町で郊外線（高浜線）に乗換。"},
- fallbackSkip:true,
- fallback:[[33.840,132.7511],[33.8417,132.754]]},
-{di:7,si:3,type:"local",name:"伊予鉄道高浜線 普通",from:"大手町",dep:"17:47",to:"高浜",arr:"18:06",note:"港へ・19分",
- detail:{warn:"NAVITIME規定では徒歩24分だが、港連動の伊予鉄バスを使えば3〜5分で到着。バス時刻を事前確認。"},
- fromName:"大手町",toName:"高浜",
- lineNames:["高浜線", "伊予鉄道高浜線"],
- fallback:[[33.8417,132.754],[33.857,132.733],[33.872,132.7119]]},
-{di:7,si:4,type:"ferry",name:"石崎汽船 スーパージェット",from:"松山観光港",dep:"18:30",to:"広島宇品港",arr:"19:50",note:"高速双胴船・1時間20分",
- detail:{tip:"通常フェリー（2h40m）の半分の時間で広島へ。瀬戸内の島々を縫うように疾走する絶景ルート。要予約。"},
- fallbackSkip:true,
- fallback:[[33.874,132.705],[34.05,132.58],[34.20,132.51],[34.356,132.451]]},
-{di:7,si:5,type:"bus",name:"広島電鉄5号線（路面電車）",from:"広島港",dep:"20:03",to:"広島駅",arr:"20:32",note:"29分",
- detail:{tip:"広島港〜広島駅を直通。乗換なし。ICカード利用可。"},
- fromName:"広島港", toName:"広島",
- fallbackSkip:true,
- fallback:[[34.356,132.451],[34.374,132.461],[34.3974,132.4756]]},
-// ── Day 9 ──
-{di:8,si:0,type:"kanko",name:"JR山陽本線 etSETOra",from:"広島",dep:"09:32",to:"福山",arr:"12:53",note:"3時間21分・瀬戸内観光列車",
- detail:{tip:"赤いボディのキハ47形改造車。瀬戸内の名所を巡りながらスイーツサービスあり。全席指定。",info:"etSETOra＝etcetera（その他）＋setouchi（瀬戸内）の造語。"},
- fromName:"広島",toName:"福山",
- fallbackSkip:true,
- fallback:[[34.3974,132.4756],[34.4065,133.2082],[34.4018,133.0842],[34.4893,133.3614]]},
-{di:8,si:1,type:"shinkansen",name:"JR山陽新幹線 のぞみ25号",from:"福山",dep:"14:04",to:"広島",arr:"14:27",note:"⚠広島到着から在来線まで3分",warn:true,
- detail:{warn:"広島到着（14:27）から在来線（14:30）まで3分。新幹線前方車両に乗り降車後すぐ連絡改札をダッシュ。"},
- fromName:"福山",toName:"広島",
- fallbackSkip:true,
- fallback:[[34.4893,133.3614],[34.3974,132.4756]]},
-{di:8,si:2,type:"tokkyu",name:"JR山陽本線 普通",from:"広島",dep:"14:30",to:"宮島口",arr:"14:57",note:"27分",
- detail:{tip:"宮島口からJRフェリーで宮島へ渡れる。"},
- fromName:"広島",toName:"宮島口",
- lineNames:["山陽本線", "JR山陽本線"],
- fallback:[[34.3974,132.4756],[34.3121,132.3027]]},
-{di:8,si:3,type:"ferry",name:"JR宮島航路",from:"宮島口",dep:"15:10",to:"宮島",arr:"15:20",note:"10分",
- detail:{tip:"厳島神社まで往復30〜40分のため滞在はかなりタイト。",info:"大鳥居は干潮時に根元まで歩いて近づける。"},
- fallbackSkip:true,
- fallback:[[34.3121,132.3027],[34.2955,132.3198]]},
-{di:8,si:4,type:"ferry",name:"世界遺産航路（アクアネット広島）",from:"宮島",dep:"16:25",to:"平和公園＜元安橋＞",arr:"17:10",note:"高速船45分・原爆ドームへ直行",
- detail:{tip:"宮島から直接、原爆ドーム前の元安橋へ着岸。通常ルートより大幅時短かつ川からの眺めも新鮮。要予約（約2,400円）。"},
- fallbackSkip:true,
- fallback:[[34.2955,132.3198],[34.340,132.370],[34.394,132.454]]},
-{di:8,si:5,type:"bus",name:"広島電鉄6号線（路面電車）",from:"原爆ドーム前",dep:"18:35",to:"広島駅",arr:"18:51",note:"16分",
- detail:{tip:"平和記念公園から広島駅へ。広電6号線で直通。"},
- fallbackSkip:true,
- fallback:[[34.394,132.454],[34.3974,132.4756]]},
-{di:8,si:6,type:"shinkansen",name:"JR山陽新幹線 こだま959号",from:"広島",dep:"19:08",to:"新下関",arr:"20:20",note:"1時間12分",
- detail:{tip:"各駅停車の「こだま」。夕暮れの広島〜山口の車窓。"},
- fromName:"広島",toName:"新下関",
- fallbackSkip:true,
- fallback:[[34.3974,132.4756],[34.177,131.816],[34.0057,130.948]]},
-// ── Day 10 ──
-{di:9,si:0,type:"kanko",name:"JR山陰本線 〇〇のはなし",from:"新下関",dep:"09:54",to:"東萩",arr:"12:56",note:"3時間2分・山陰の観光列車",
- detail:{tip:"下関〜東萩を結ぶ観光列車。山陰の海岸線・日本海の荒波と漁村の景観が続く。全席指定。",warn:"東萩到着（12:56）から津和野行きバス（13:00）まで4分。車内でスタンバイし到着後すぐバス停へ。"},
- fromName:"新下関",toName:"東萩",
- fallbackSkip:true,
- fallback:[[34.0057,130.948],[34.108,131.178],[34.214,131.228],[34.340,131.298],[34.405,131.348],[34.4172,131.4103]]},
-{di:9,si:1,type:"bus",name:"防長交通 路線バス（津和野行き）",from:"東萩駅前",dep:"13:00",to:"津和野駅",arr:"14:45",note:"⚠4分乗換・1時間45分",warn:true,
- detail:{warn:"津和野行きバスは1日数本しかない。逃すとタクシーを使う他ない。現金を事前準備。",tip:"山陰の山間部を走る路線バス。中国山地の山並みが続く。"},
- fallbackSkip:true,
- fallback:[[34.4172,131.4103],[34.443,131.572],[34.4725,131.7737]]},
-{di:9,si:2,type:"kanko",name:"JR山口線 SLやまぐち号",from:"津和野",dep:"16:12",to:"新山口",arr:"18:00",note:"1時間48分・蒸気機関車",
- detail:{tip:"「貴婦人」の愛称で知られるC57形蒸気機関車牽引。昭和初期の雰囲気が漂う旧型客車。煙と汽笛が鉄道ファンの心をつかむ。",info:"全席指定。春〜秋の週末中心に運行。発売日に即完売する便も多い。"},
- fromName:"津和野",toName:"新山口",
- fallbackSkip:true,
- fallback:[[34.4725,131.7737],[34.358,131.600],[34.1861,131.4714],[34.0933,131.3966]]},
-{di:9,si:3,type:"shinkansen",name:"JR山陽新幹線 のぞみ43号",from:"新山口",dep:"19:34",to:"博多",arr:"20:09",note:"35分",
- detail:{tip:"乗換まで約1時間半あり。新山口駅2階「プレミアムお土産横丁」で山口名物（外郎・瓦そば）を調達可。"},
- fromName:"新山口",toName:"博多",
- fallbackSkip:true,
- fallback:[[34.0933,131.3966],[33.885,130.817],[33.590,130.4206]]},
-// ── Day 11 ──
-{di:10,si:0,type:"tokkyu",name:"JR鹿児島本線 特急 みどり23号",from:"博多",dep:"11:37",to:"有田",arr:"12:54",note:"1時間17分",
- detail:{tip:"有田は有田焼の産地。松浦鉄道乗換まで6分あり駅前を素早く見学可能。"},
- fromName:"博多",toName:"有田",
- fallbackSkip:true,
- fallback:[[33.590,130.4206],[33.3781,130.508],[33.2646,130.2993],[33.1962,130.0223],[33.1838,129.8818]]},
-{di:10,si:1,type:"local",name:"松浦鉄道（有田→伊万里）",from:"有田",dep:"13:00",to:"伊万里",arr:"13:24",note:"24分",
- detail:{tip:"JRから松浦鉄道へ乗換。有田駅は改札が分かれているため注意。",info:"伊万里も陶磁器の産地。"},
- fromName:"有田",toName:"伊万里",
- lineNames:["松浦鉄道西九州線", "西九州線", "松浦鉄道"],
- fallback:[[33.1838,129.8818],[33.2719,129.8767]]},
-{di:10,si:2,type:"local",name:"松浦鉄道（伊万里→たびら平戸口）",from:"伊万里",dep:"13:37",to:"たびら平戸口",arr:"14:46",note:"日本最西端（普通鉄道）へ・1h9m",
- detail:{tip:"「普通鉄道における日本最西端の駅」。駅舎内に鉄道記念館あり。記念入場券・最西端証明書も販売。",info:"1時間の滞在。記念撮影・グッズ購入に最適な時間配分。"},
- fromName:"伊万里",toName:"たびら平戸口",
- lineNames:["松浦鉄道西九州線", "西九州線", "松浦鉄道"],
- fallback:[[33.2719,129.8767],[33.3443,129.7079],[33.3625,129.5826]]},
-{di:10,si:3,type:"local",name:"松浦鉄道（たびら平戸口→佐々）",from:"たびら平戸口",dep:"15:46",to:"佐々",arr:"16:21",note:"1時間滞在後・35分",
- detail:{tip:"佐々で1時間25分の待機。神崎鼻（日本最西端の地）へタクシーで行くプランも（片道10〜15分）。"},
- fromName:"たびら平戸口",toName:"佐々",
- lineNames:["松浦鉄道西九州線", "西九州線", "松浦鉄道"],
- fallback:[[33.3625,129.5826],[33.3068,129.6271],[33.2826,129.6673],[33.2367,129.6469]]},
-{di:10,si:4,type:"local",name:"松浦鉄道（佐々→佐世保）",from:"佐々",dep:"17:46",to:"佐世保",arr:"18:27",note:"1時間25分待機後・41分",
- detail:{tip:"松浦鉄道の終点・佐世保。佐世保バーガー発祥の地。乗換まで43分あり、駅周辺でバーガーを食べる絶好のタイミング。"},
- fromName:"佐々",toName:"佐世保",
- lineNames:["松浦鉄道西九州線", "西九州線", "松浦鉄道"],
- fallback:[[33.2367,129.6469],[33.2089,129.722],[33.1639,129.7257]]},
-{di:10,si:5,type:"tokkyu",name:"JR佐世保線 特急 みどり（リレーかもめ）56号",from:"佐世保",dep:"19:10",to:"武雄温泉",arr:"19:54",note:"44分",
- detail:{tip:"武雄温泉で西九州新幹線「かもめ」に対面接続。同一ホームでスムーズに乗換。"},
- fromName:"佐世保",toName:"武雄温泉",
- fallbackSkip:true,
- fallback:[[33.1639,129.7257],[33.233,129.865],[33.1962,130.0223]]},
-{di:10,si:6,type:"shinkansen",name:"JR西九州新幹線 かもめ55号",from:"武雄温泉",dep:"20:05",to:"長崎",arr:"20:24",note:"対面乗換→新幹線24分",
- detail:{tip:"2022年9月開業。N700S系使用。武雄温泉〜長崎66kmを24分で結ぶ。長崎駅は高架化された新しい駅舎。"},
- fromName:"武雄温泉",toName:"長崎",
- fallbackSkip:true,
- fallback:[[33.1962,130.0223],[33.125,130.002],[32.923,129.931],[32.851,130.0416],[32.7531,129.8705]]},
-// ── Day 12 ──
-{di:11,si:0,type:"taxi",name:"タクシー（長崎→瀬戸港）",from:"長崎",dep:"11:12",to:"瀬戸港",arr:"12:24",note:"1時間11分・約15,790円",
- detail:{tip:"事前にタクシー会社に予約しておくと安心。",warn:"フェリー出港（12:44）に余裕を持って到着するため11:12出発はほぼ必須。"},
- fallbackSkip:true,
- fallback:[[32.7531,129.8705],[32.840,129.780],[32.8915,129.7197]]},
-{di:11,si:1,type:"ferry",name:"西海沿岸商船フェリー（往路）",from:"瀬戸港",dep:"12:44",to:"池島港",arr:"13:17",note:"炭鉱の島へ・33分",
- detail:{tip:"炭鉱で栄えた池島。2001年閉山後も住民が暮らす廃墟観光の聖地。廃墟化した高層アパートや炭鉱施設跡が見られる。",info:"島内は軽トラタクシー（島民が案内）で観光可能。3時間43分の絶妙な滞在時間。"},
- fallbackSkip:true,
- fallback:[[32.8915,129.7197],[32.882,129.7044]]},
-{di:11,si:2,type:"ferry",name:"西海沿岸商船フェリー（帰路）",from:"池島港",dep:"17:00",to:"瀬戸港",arr:"17:40",note:"島観光後・40分",
- detail:{tip:"池島での観光後、瀬戸港へ戻る。タクシーでハウステンボスへショートカット。"},
- fallbackSkip:true,
- fallback:[[32.882,129.7044],[32.8915,129.7197]]},
-{di:11,si:3,type:"taxi",name:"タクシー（瀬戸港→ハウステンボス）",from:"瀬戸港",dep:"17:40",to:"ハウステンボス",arr:"18:17",note:"37分・約8,450円",
- detail:{tip:"瀬戸港からJR大村線のハウステンボス駅へ。タクシーでショートカット。通常ルートより30分以上短縮。"},
- fallbackSkip:true,
- fallback:[[32.8915,129.7197],[33.000,129.740],[33.0919,129.7965]]},
-{di:11,si:4,type:"local",name:"JR大村線 普通",from:"ハウステンボス",dep:"18:36",to:"新大村",arr:"19:19",note:"43分",
- detail:{tip:"西九州新幹線の接続駅・新大村へ。新大村から長崎空港まではタクシーで10分。"},
- fromName:"ハウステンボス",toName:"新大村",
- lineNames:["大村線", "JR大村線"],
- fallback:[[33.0919,129.7965],[33.064,129.864],[33.013,129.945],[32.940,129.953],[32.923,129.931]]},
-{di:11,si:5,type:"taxi",name:"タクシー（新大村→長崎空港）",from:"新大村",dep:"19:19",to:"長崎空港",arr:"19:29",note:"10分・約2,020円",
- detail:{tip:"長崎空港はフェリーターミナルも兼ねる。航空側ターミナルへ向かうこと。"},
- fallbackSkip:true,
- fallback:[[32.923,129.931],[32.917,129.914]]},
-{di:11,si:6,type:"plane",name:"航空便 長崎→羽田",from:"長崎空港",dep:"20:30",to:"羽田空港",arr:"22:10",note:"1時間40分・旅のフィニッシュ！",
- detail:{tip:"12日間の大旅行の締めくくり。空港でカステラや角煮まんを手土産に。お疲れさまでした！"},
- fallbackSkip:true,
- fallback:[[32.917,129.914],[35.5494,139.7798]]},
-];
+const fileInput = document.getElementById('file-input');
+const dropZone = document.getElementById('drop-zone');
 
-// =====================================================================
-// ローカルストレージキャッシュ
-// =====================================================================
-function cacheGet(query) {
-  try {
-    const raw = localStorage.getItem("osm_" + btoa(unescape(encodeURIComponent(query))));
-    if (!raw) return null;
-    const {ts, data} = JSON.parse(raw);
-    if (Date.now() - ts > CACHE_TTL) { localStorage.removeItem("osm_" + btoa(unescape(encodeURIComponent(query)))); return null; }
-    return data;
-  } catch(e) { return null; }
-}
-function cacheSet(query, data) {
-  try {
-    const key = "osm_" + btoa(unescape(encodeURIComponent(query)));
-    localStorage.setItem(key, JSON.stringify({ts: Date.now(), data}));
-  } catch(e) {}
-}
-function clearCache() {
-  const keys = Object.keys(localStorage).filter(k => k.startsWith("osm_"));
-  keys.forEach(k => localStorage.removeItem(k));
-  alert(`キャッシュを${keys.length}件削除しました。ページをリロードすると再取得します。`);
-}
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) loadFile(e.target.files[0]);
+});
+['dragover','dragenter'].forEach(ev =>
+  dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('dragover'); }));
+['dragleave','drop'].forEach(ev =>
+  dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove('dragover'); }));
+dropZone.addEventListener('drop', e => {
+  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+});
 
-// =====================================================================
-// Overpass API（キャッシュ付き・同時実行数制限付き）
-// =====================================================================
-let lastRequestTime = 0;
-
-async function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-async function fetchOverpass(query) {
-  const cached = cacheGet(query);
-  if (cached) return cached;
-
-  for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
-    // リクエスト間隔を確保
-    const now = Date.now();
-    const elapsed = now - lastRequestTime;
-    if (elapsed < REQUEST_INTERVAL) {
-      await sleep(REQUEST_INTERVAL - elapsed);
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      startApp(data);
+    } catch(err) {
+      document.getElementById('loader-err').textContent = '読み込み失敗: ' + err.message;
     }
+  };
+  reader.readAsText(file);
+}
 
-    for (const ep of ENDPOINTS) {
+async function tryAutoLoad() {
+  document.getElementById('loader-err').textContent = '読込中...';
+  try {
+    const res = await fetch('itinerary.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    startApp(data);
+  } catch(err) {
+    document.getElementById('loader-err').textContent =
+      '自動読込失敗（' + err.message + '）。file://では使えません。ファイルを手動選択してください。';
+  }
+}
+
+function startApp(data) {
+  SEGS = data.segs || [];
+  DAY_LABELS = data.dayLabels || [];
+  if (data.title) {
+    document.getElementById('trip-title').textContent = '🚄 ' + data.title;
+    document.title = data.title;
+  }
+  document.getElementById('loader-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  initMapAndUI();
+}
+
+function reload() { location.reload(); }
+
+// =====================================================================
+// localStorageキャッシュ
+// =====================================================================
+function cacheKey(q){ return "osm_" + btoa(unescape(encodeURIComponent(q))); }
+function cacheGet(q){
+  try {
+    const raw = localStorage.getItem(cacheKey(q));
+    if (!raw) return null;
+    const {ts,data} = JSON.parse(raw);
+    if (Date.now()-ts > CACHE_TTL){ localStorage.removeItem(cacheKey(q)); return null; }
+    return data;
+  } catch(e){ return null; }
+}
+function cacheSet(q,data){
+  try { localStorage.setItem(cacheKey(q), JSON.stringify({ts:Date.now(),data})); } catch(e){}
+}
+function clearCache(){
+  const ks = Object.keys(localStorage).filter(k=>k.startsWith("osm_"));
+  ks.forEach(k=>localStorage.removeItem(k));
+  alert(`キャッシュを${ks.length}件削除しました。リロードで再取得します。`);
+}
+
+// =====================================================================
+// Overpass
+// =====================================================================
+let lastReq = 0;
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+async function fetchOverpass(query, logArr) {
+  const cached = cacheGet(query);
+  if (cached) { logArr && logArr.push({t:'cache', msg:'キャッシュHIT'}); return {data:cached, cached:true}; }
+
+  for (let attempt=0; attempt<MAX_RETRY; attempt++){
+    const wait = REQUEST_INTERVAL - (Date.now()-lastReq);
+    if (wait > 0) await sleep(wait);
+
+    for (const ep of ENDPOINTS){
       try {
-        lastRequestTime = Date.now();
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 60000);
+        lastReq = Date.now();
+        const ctrl = new AbortController();
+        const timer = setTimeout(()=>ctrl.abort(), 60000);
         const res = await fetch(ep, {
-          method: "POST",
-          headers: {"Content-Type": "application/x-www-form-urlencoded"},
-          body: "data=" + encodeURIComponent(query),
-          signal: controller.signal,
+          method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded"},
+          body:"data="+encodeURIComponent(query),
+          signal:ctrl.signal,
         });
         clearTimeout(timer);
-
-        if (res.status === 429) {
-          // レート制限 → 待機してリトライ
-          const waitSec = Math.round(RETRY_WAIT / 1000);
-          document.getElementById('status-text').textContent =
-            `⏳ レート制限中… ${waitSec}秒待機後リトライ (${attempt+1}/${MAX_RETRY})`;
+        if (res.status === 429){
+          logArr && logArr.push({t:'warn', msg:`429 レート制限 → ${RETRY_WAIT/1000}秒待機 (${attempt+1}/${MAX_RETRY})`});
+          document.getElementById('status-text').textContent = `⏳ レート制限中…${RETRY_WAIT/1000}秒待機`;
           await sleep(RETRY_WAIT);
-          break; // 次のattemptへ
+          break;
         }
-        if (!res.ok) continue; // 他のエンドポイントを試す
-
+        if (!res.ok){ logArr && logArr.push({t:'warn', msg:`${ep.split('/')[2]} → HTTP ${res.status}`}); continue; }
         const data = await res.json();
         cacheSet(query, data);
-        return data;
-      } catch(e) {
-        // タイムアウト・接続エラーは次のエンドポイントへ
+        return {data, cached:false, endpoint:ep.split('/')[2]};
+      } catch(e){
+        const reason = e.name==='AbortError' ? 'タイムアウト(60秒)' : e.message;
+        logArr && logArr.push({t:'err', msg:`${ep.split('/')[2]} → ${reason}`});
       }
     }
   }
-  return null;
-}
-
-// 完全シリアル実行（同時実行数=1・429回避）
-async function runWithConcurrency(tasks, limit) {
-  for (const task of tasks) {
-    try { await task(); } catch(e) {}
-  }
+  return {data:null, cached:false};
 }
 
 // =====================================================================
-// 線路geometry抽出（BFSで2駅間のみ）
+// 幾何ユーティリティ
 // =====================================================================
-function haversine(a, b) {
-  const R = 6371000, dLat = (b[0]-a[0])*Math.PI/180, dLon = (b[1]-a[1])*Math.PI/180;
-  const x = Math.sin(dLat/2)**2 + Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLon/2)**2;
-  return R * 2 * Math.asin(Math.sqrt(x));
+function haversine(a,b){
+  const R=6371000, dLat=(b[0]-a[0])*Math.PI/180, dLon=(b[1]-a[1])*Math.PI/180;
+  const x=Math.sin(dLat/2)**2 + Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R*2*Math.asin(Math.sqrt(x));
 }
+function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 
-// wayを始点→終点の順に連結して一本のポリラインにする（BFS不要・高速）
-// 各wayは数メートル間隔の点列。線路は基本1本道なので、端点同士を貪欲に連結する。
-function stitchWays(wayElements, startCoord, endCoord) {
-  // 各wayのgeometryを [lat,lon][] に変換
+// wayを始点→終点の順に連結（線形・高速）
+function stitchWays(wayElements, startCoord, endCoord, gap=STITCH_GAP){
   let segments = wayElements
-    .filter(el => el.type === "way" && el.geometry && el.geometry.length >= 2)
-    .map(el => el.geometry.map(g => [g.lat, g.lon]));
-  if (segments.length === 0) return null;
+    .filter(el => el.geometry && el.geometry.length>=2)
+    .map(el => ({coords: el.geometry.map(g=>[g.lat,g.lon]), wayId: el.id, tags: el.tags||{}}));
+  if (segments.length===0) return null;
 
-  // ① 始点に最も近い端点を持つsegmentを起点にする
-  let bestIdx = 0, bestDist = Infinity, bestReversed = false;
-  segments.forEach((seg, i) => {
-    const dStart = haversine(startCoord, seg[0]);
-    const dEnd   = haversine(startCoord, seg[seg.length - 1]);
-    if (dStart < bestDist) { bestDist = dStart; bestIdx = i; bestReversed = false; }
-    if (dEnd   < bestDist) { bestDist = dEnd;   bestIdx = i; bestReversed = true; }
+  // 始点に最も近い端点を持つsegを起点に
+  let bi=0, bd=Infinity, brev=false;
+  segments.forEach((seg,i)=>{
+    const c=seg.coords;
+    const d0=haversine(startCoord,c[0]), d1=haversine(startCoord,c[c.length-1]);
+    if(d0<bd){bd=d0;bi=i;brev=false;}
+    if(d1<bd){bd=d1;bi=i;brev=true;}
   });
+  const used=new Array(segments.length).fill(false);
+  used[bi]=true;
+  let chain = brev ? [...segments[bi].coords].reverse() : [...segments[bi].coords];
 
-  const used = new Array(segments.length).fill(false);
-  used[bestIdx] = true;
-  let chain = bestReversed ? [...segments[bestIdx]].reverse() : [...segments[bestIdx]];
-
-  // ② 末端に最も近い未使用segmentを貪欲に連結
-  while (true) {
-    const tail = chain[chain.length - 1];
-    let nextIdx = -1, nextDist = Infinity, nextReversed = false;
-    for (let i = 0; i < segments.length; i++) {
-      if (used[i]) continue;
-      const seg = segments[i];
-      const dHead = haversine(tail, seg[0]);
-      const dTail = haversine(tail, seg[seg.length - 1]);
-      if (dHead < nextDist) { nextDist = dHead; nextIdx = i; nextReversed = false; }
-      if (dTail < nextDist) { nextDist = dTail; nextIdx = i; nextReversed = true; }
+  // 末端に最も近い未使用segを貪欲連結
+  while(true){
+    const tail=chain[chain.length-1];
+    let ni=-1,nd=Infinity,nrev=false;
+    for(let i=0;i<segments.length;i++){
+      if(used[i])continue;
+      const c=segments[i].coords;
+      const d0=haversine(tail,c[0]), d1=haversine(tail,c[c.length-1]);
+      if(d0<nd){nd=d0;ni=i;nrev=false;}
+      if(d1<nd){nd=d1;ni=i;nrev=true;}
     }
-    // 次のwayが離れすぎている場合（500m超）は連結終了
-    if (nextIdx < 0 || nextDist > 1000) break;
-    used[nextIdx] = true;
-    const seg = nextReversed ? [...segments[nextIdx]].reverse() : [...segments[nextIdx]];
-    chain.push(...seg);
+    if(ni<0||nd>gap)break;
+    used[ni]=true;
+    const c = nrev ? [...segments[ni].coords].reverse() : [...segments[ni].coords];
+    chain.push(...c);
   }
 
-  // ③ 終点に最も近い点で切り詰める（乗る区間だけにする）
-  let endCutIdx = chain.length - 1, endCutDist = Infinity;
-  chain.forEach((pt, i) => {
-    const d = haversine(endCoord, pt);
-    if (d < endCutDist) { endCutDist = d; endCutIdx = i; }
+  // 始点・終点に最も近い点で切り詰め
+  let sIdx=0,sD=Infinity, eIdx=chain.length-1,eD=Infinity;
+  chain.forEach((pt,i)=>{
+    const ds=haversine(startCoord,pt), de=haversine(endCoord,pt);
+    if(ds<sD){sD=ds;sIdx=i;}
+    if(de<eD){eD=de;eIdx=i;}
   });
-  // 始点に最も近い点も探して切り詰め
-  let startCutIdx = 0, startCutDist = Infinity;
-  chain.forEach((pt, i) => {
-    const d = haversine(startCoord, pt);
-    if (d < startCutDist) { startCutDist = d; startCutIdx = i; }
-  });
-
-  // 始点〜終点の範囲だけを抽出
-  let lo = Math.min(startCutIdx, endCutIdx);
-  let hi = Math.max(startCutIdx, endCutIdx);
-  let result = chain.slice(lo, hi + 1);
-  // 始点が後ろにある場合は反転して「出発→到着」の向きに揃える
-  if (startCutIdx > endCutIdx) result.reverse();
-
-  return result.length >= 2 ? result : chain;
+  let lo=Math.min(sIdx,eIdx), hi=Math.max(sIdx,eIdx);
+  let result=chain.slice(lo,hi+1);
+  if(sIdx>eIdx) result.reverse();
+  return {coords: result.length>=2?result:chain, startGap:sD, endGap:eD, usedWays:used.filter(Boolean).length, totalWays:segments.length};
 }
 
-async function fetchRailCoords(seg) {
-  // fallbackSkip=true の区間はOSMをスキップして直線描画
-  if (seg.fallbackSkip) return null;
+// =====================================================================
+// 路線データ取得（複数戦略）
+// =====================================================================
+function calcBbox(seg){
+  if(seg.bbox) return seg.bbox;
+  if(!seg.fallback?.length) return null;
+  let mnLat=90,mxLat=-90,mnLon=180,mxLon=-180;
+  seg.fallback.forEach(c=>{
+    if(c[0]<mnLat)mnLat=c[0]; if(c[0]>mxLat)mxLat=c[0];
+    if(c[1]<mnLon)mnLon=c[1]; if(c[1]>mxLon)mxLon=c[1];
+  });
+  const pad=0.05;
+  return [mnLat-pad, mnLon-pad, mxLat+pad, mxLon+pad];
+}
 
-  // lineNames（複数候補）を取得。後方互換でlineName(単数)も許容
-  const lineNames = seg.lineNames || (seg.lineName ? [seg.lineName] : []);
-  if (lineNames.length === 0) return null;
+// OSMの駅ノードを探して端点の場所情報を返す
+async function identifyEndpoint(coord, bbox, log){
+  const [S,W,N,E]=bbox;
+  const q=`[out:json][timeout:15];node["railway"="station"](${S},${W},${N},${E});out body;`;
+  const {data}=await fetchOverpass(q, log);
+  if(!data?.elements) return null;
+  let best=null, bd=Infinity;
+  for(const n of data.elements){
+    if(n.type!=='node'||!n.tags?.name) continue;
+    const d=haversine(coord,[n.lat,n.lon]);
+    if(d<bd){bd=d;best={name:n.tags.name, dist:d, line:n.tags.line||n.tags.operator||''};}
+  }
+  return (best&&best.dist<NEAR_STATION)?best:(best?{...best,far:true}:null);
+}
 
-  // bboxをfallbackから自動計算（pad=0.05度≒5km）
-  let S, W, N, E;
-  if (seg.bbox) {
-    [S, W, N, E] = seg.bbox;
-  } else if (seg.fallback?.length > 0) {
-    let minLat=90, maxLat=-90, minLon=180, maxLon=-180;
-    seg.fallback.forEach(c => {
-      if(c[0]<minLat) minLat=c[0]; if(c[0]>maxLat) maxLat=c[0];
-      if(c[1]<minLon) minLon=c[1]; if(c[1]>maxLon) maxLon=c[1];
-    });
-    const pad=0.05;
-    S=minLat-pad; N=maxLat+pad; W=minLon-pad; E=maxLon+pad;
-  } else return null;
-
-  const fromCoord = seg.fallback?.[0] ?? null;
-  const toCoord   = seg.fallback?.[seg.fallback.length-1] ?? null;
-  if (!fromCoord || !toCoord) return null;
-
-  // 複数の路線名候補をOR条件で1クエリにまとめて取得
-  // name~"候補1|候補2|候補3" の正規表現で一括検索
+// 戦略A: 路線名でrelation取得
+async function strategyByLineName(seg, bbox, log){
+  const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
+  if(lineNames.length===0) return null;
+  const [S,W,N,E]=bbox;
   const nameRegex = lineNames.map(escapeRegex).join("|");
-  const relQuery = `[out:json][timeout:30];
+  const q=`[out:json][timeout:30];
 relation["route"~"train|tram|light_rail|monorail|subway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
 way(r)["railway"~"rail|tram|light_rail|monorail|subway"];
 out geom;`;
-
-  const wayData = await fetchOverpass(relQuery).catch(()=>null);
-  if (!wayData?.elements) return null;
-  const wayEls = wayData.elements.filter(e => e.type==="way" && e.geometry?.length>=2);
-  if (wayEls.length === 0) return null;
-
-  // 複数路線のwayを全て集めた上で、fallback始終点間を連結・抽出する
-  // （直通運転で複数relationにまたがる場合も1本につながる）
-  const coords = stitchWays(wayEls, fromCoord, toCoord);
-  return (coords && coords.length>=2) ? coords : null;
+  const t0=performance.now();
+  const {data, cached, endpoint} = await fetchOverpass(q, log);
+  const dt=((performance.now()-t0)/1000).toFixed(1);
+  if(!data?.elements){
+    log.push({t:'err', msg:`戦略A: データ取得失敗 (${dt}秒)`});
+    return null;
+  }
+  // 取得できた路線名を列挙
+  const relNames=[...new Set(data.elements.filter(e=>e.type==='relation').map(e=>e.tags?.name).filter(Boolean))];
+  const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+  log.push({t:'ok', msg:`戦略A: ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から取得 (${dt}秒)`});
+  log.push({t:'info', msg:`　取得路線(${relNames.length}): ${relNames.join(' / ')||'(名前なしrelation)'}`});
+  log.push({t:'info', msg:`　way数: ${wayEls.length}`});
+  if(wayEls.length===0) return null;
+  return {wayEls, relNames};
 }
 
-// 正規表現の特殊文字をエスケープ
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// 戦略B: 乗降駅周辺の全鉄道wayを取得して連結（路線名に依存しない）
+async function strategyByArea(seg, bbox, log){
+  const fromCoord=seg.fallback?.[0], toCoord=seg.fallback?.[seg.fallback.length-1];
+  if(!fromCoord||!toCoord) return null;
+  // 乗降駅を含む狭いbboxで全railを取得
+  const pad=0.03;
+  const S=Math.min(fromCoord[0],toCoord[0])-pad, N=Math.max(fromCoord[0],toCoord[0])+pad;
+  const W=Math.min(fromCoord[1],toCoord[1])-pad, E=Math.max(fromCoord[1],toCoord[1])+pad;
+  const q=`[out:json][timeout:40];
+way["railway"~"rail|tram|light_rail|monorail|subway"](${S},${W},${N},${E});
+out geom;`;
+  const t0=performance.now();
+  const {data, cached, endpoint}=await fetchOverpass(q, log);
+  const dt=((performance.now()-t0)/1000).toFixed(1);
+  if(!data?.elements){
+    log.push({t:'err', msg:`戦略B(エリア): データ取得失敗 (${dt}秒)`});
+    return null;
+  }
+  const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+  log.push({t:'ok', msg:`戦略B(エリア): ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から取得 (${dt}秒)`});
+  log.push({t:'info', msg:`　エリア内way数: ${wayEls.length}`});
+  if(wayEls.length===0) return null;
+  return {wayEls, relNames:['(エリア検索)']};
+}
+
+async function fetchRailCoords(seg, log){
+  if(seg.fallbackSkip){ log.push({t:'info', msg:'fallbackSkip指定 → API取得せず直線描画'}); return null; }
+  const bbox=calcBbox(seg);
+  if(!bbox){ log.push({t:'err', msg:'bbox計算不可'}); return null; }
+  const fromCoord=seg.fallback?.[0], toCoord=seg.fallback?.[seg.fallback.length-1];
+  if(!fromCoord||!toCoord){ log.push({t:'err', msg:'始終点座標なし'}); return null; }
+
+  log.push({t:'info', msg:`乗車駅(fallback始点): [${fromCoord[0].toFixed(4)}, ${fromCoord[1].toFixed(4)}]`});
+  log.push({t:'info', msg:`降車駅(fallback終点): [${toCoord[0].toFixed(4)}, ${toCoord[1].toFixed(4)}]`});
+
+  // --- 戦略A: 路線名 ---
+  let res = await strategyByLineName(seg, bbox, log);
+  let stitched = null;
+  if(res){
+    stitched = stitchWays(res.wayEls, fromCoord, toCoord);
+    if(stitched){
+      log.push({t:'info', msg:`　連結: ${stitched.usedWays}/${stitched.totalWays} wayを使用`});
+      log.push({t:'info', msg:`　始点ギャップ: ${stitched.startGap.toFixed(0)}m / 終点ギャップ: ${stitched.endGap.toFixed(0)}m`});
+    }
+  }
+
+  // --- 戦略A の結果が不十分なら戦略B ---
+  const insufficient = !stitched || stitched.startGap>NEAR_STATION || stitched.endGap>NEAR_STATION || stitched.coords.length<2;
+  if(insufficient){
+    log.push({t:'warn', msg:`戦略Aの結果が不十分（端点が駅から離れている）→ 戦略B(エリア検索)を試行`});
+    const resB = await strategyByArea(seg, bbox, log);
+    if(resB){
+      const stB = stitchWays(resB.wayEls, fromCoord, toCoord);
+      if(stB){
+        log.push({t:'info', msg:`　連結(B): ${stB.usedWays}/${stB.totalWays} wayを使用`});
+        log.push({t:'info', msg:`　始点ギャップ(B): ${stB.startGap.toFixed(0)}m / 終点ギャップ(B): ${stB.endGap.toFixed(0)}m`});
+        // BがAより良ければB採用
+        if(!stitched || (stB.startGap+stB.endGap < stitched.startGap+stitched.endGap)){
+          stitched = stB;
+          res = resB;
+          log.push({t:'ok', msg:`　→ 戦略Bの結果を採用`});
+        } else {
+          log.push({t:'info', msg:`　→ 戦略Aの方が良好なため戦略A維持`});
+        }
+      }
+    }
+  }
+
+  if(!stitched || stitched.coords.length<2){
+    log.push({t:'err', msg:'有効な経路を構築できず → fallback採用'});
+    return null;
+  }
+
+  // 端点の場所情報を取得
+  const ep1=stitched.coords[0], ep2=stitched.coords[stitched.coords.length-1];
+  log.push({t:'info', msg:`描画線の端点1: [${ep1[0].toFixed(4)}, ${ep1[1].toFixed(4)}]`});
+  log.push({t:'info', msg:`描画線の端点2: [${ep2[0].toFixed(4)}, ${ep2[1].toFixed(4)}]`});
+  const [st1, st2] = await Promise.all([
+    identifyEndpoint(ep1, bbox, log),
+    identifyEndpoint(ep2, bbox, log),
+  ]);
+  if(st1) log.push({t: st1.far?'warn':'ok', msg:`　端点1の最寄駅: ${st1.name}${st1.line?'('+st1.line+')':''} (${st1.dist.toFixed(0)}m)${st1.far?' ※離れている':''}`});
+  else log.push({t:'warn', msg:`　端点1付近に駅情報なし`});
+  if(st2) log.push({t: st2.far?'warn':'ok', msg:`　端点2の最寄駅: ${st2.name}${st2.line?'('+st2.line+')':''} (${st2.dist.toFixed(0)}m)${st2.far?' ※離れている':''}`});
+  else log.push({t:'warn', msg:`　端点2付近に駅情報なし`});
+
+  return stitched.coords;
 }
 
 // =====================================================================
-// 地図・ポリライン管理
+// 地図・描画
 // =====================================================================
-const map = L.map('map').setView([35.0, 134.5], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  maxZoom:19
-}).addTo(map);
+function initMapAndUI(){
+  map = L.map('map').setView([35.0,134.5], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom:19
+  }).addTo(map);
+  buildPanel();
+  buildLegend();
+  loadAll();
+}
 
-const plMap = {}; // key→{fallback?:pl, osm?:pl}
-let activePl = null, activeRow = null;
-
-function makePl(coords, seg) {
-  const t = T[seg.type];
-  const pl = L.polyline(coords, {color:t.color, weight:t.w, dashArray:t.dash, opacity:0.85});
-  pl._baseW = t.w; pl._active = false;
-  pl.bindTooltip(
-    `<b>${seg.name}</b><br>${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b><br><span style="color:#666">${seg.note}</span>`,
-    {sticky:true, direction:'top'}
-  );
-  pl.on('mouseover', function(){ if(!this._active) this.setStyle({weight:this._baseW+2,opacity:1}); });
-  pl.on('mouseout',  function(){ if(!this._active) this.setStyle({weight:this._baseW,opacity:0.85}); });
-  pl.on('click', ()=> selectSeg(seg.di, seg.si));
+function makePl(coords, seg){
+  const t=T[seg.type];
+  const pl=L.polyline(coords,{color:t.color,weight:t.w,dashArray:t.dash,opacity:0.85});
+  pl._baseW=t.w; pl._active=false;
+  pl.bindTooltip(`<b>${seg.name}</b><br>${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b><br><span style="color:#666">${seg.note}</span>`,{sticky:true,direction:'top'});
+  pl.on('mouseover',function(){if(!this._active)this.setStyle({weight:this._baseW+2,opacity:1});});
+  pl.on('mouseout',function(){if(!this._active)this.setStyle({weight:this._baseW,opacity:0.85});});
+  pl.on('click',()=>selectSeg(seg.di,seg.si));
   return pl;
 }
-
-function putFallback(seg) {
-  if (!seg.fallback?.length) return;
-  const key = `${seg.di}-${seg.si}`;
-  if (plMap[key]?.osm || plMap[key]?.fallback) return;
-  const pl = makePl(seg.fallback, seg);
-  pl.addTo(map);
-  plMap[key] = {fallback: pl};
+function putFallback(seg){
+  if(!seg.fallback?.length) return;
+  const key=`${seg.di}-${seg.si}`;
+  if(plMap[key]?.osm||plMap[key]?.fallback) return;
+  const pl=makePl(seg.fallback,seg); pl.addTo(map);
+  plMap[key]={fallback:pl};
 }
-
-function putOsm(seg, coords) {
-  const key = `${seg.di}-${seg.si}`;
-  const entry = plMap[key] || {};
-  // fallbackを削除
-  if (entry.fallback) { map.removeLayer(entry.fallback); delete entry.fallback; }
-  // 既存OSMも削除
-  if (entry.osm) { map.removeLayer(entry.osm); }
-  const pl = makePl(coords, seg);
-  pl.addTo(map);
-  plMap[key] = {osm: pl};
-  const icon = document.getElementById(`icon-${seg.di}-${seg.si}`);
-  if (icon) icon.textContent = '🗺';
+function putOsm(seg,coords){
+  const key=`${seg.di}-${seg.si}`;
+  const e=plMap[key]||{};
+  if(e.fallback){map.removeLayer(e.fallback);delete e.fallback;}
+  if(e.osm)map.removeLayer(e.osm);
+  const pl=makePl(coords,seg); pl.addTo(map);
+  plMap[key]={osm:pl};
 }
+function getActivePl(di,si){ const e=plMap[`${di}-${si}`]; return e?.osm||e?.fallback||null; }
 
-function getActivePl(di, si) {
-  const e = plMap[`${di}-${si}`];
-  return e?.osm || e?.fallback || null;
+function resetActive(){
+  if(activePl){activePl._active=false;activePl.setStyle({weight:activePl._baseW,opacity:0.85});activePl=null;}
+  if(activeRow){activeRow.classList.remove('active');activeRow=null;}
 }
-
-function resetActive() {
-  if (activePl) { activePl._active=false; activePl.setStyle({weight:activePl._baseW,opacity:0.85}); activePl=null; }
-  if (activeRow) { activeRow.classList.remove('active'); activeRow=null; }
-}
-function selectSeg(di, si) {
+function selectSeg(di,si){
   resetActive();
-  const pl = getActivePl(di, si);
-  if (!pl) return;
+  const pl=getActivePl(di,si); if(!pl)return;
   pl._active=true; pl.setStyle({weight:pl._baseW+3,opacity:1}); activePl=pl;
-  map.fitBounds(pl.getBounds(), {padding:[50,50]});
-  const row = document.getElementById(`r-${di}-${si}`);
-  if (row) { row.classList.add('active'); row.scrollIntoView({block:'nearest'}); activeRow=row; }
-  const seg = SEGS.find(s=>s.di===di&&s.si===si);
-  if (seg) showDet(seg);
+  map.fitBounds(pl.getBounds(),{padding:[50,50]});
+  const row=document.getElementById(`r-${di}-${si}`);
+  if(row){row.classList.add('active');row.scrollIntoView({block:'nearest'});activeRow=row;}
+  const seg=SEGS.find(s=>s.di===di&&s.si===si);
+  if(seg)showDet(seg);
 }
-function showDet(seg) {
+function showDet(seg){
   const t=T[seg.type], d=seg.detail||{};
-  const title = document.getElementById('det-title');
-  title.textContent = seg.name;
-  const body = document.getElementById('det-body');
-  body.innerHTML = '';
-  const badge = document.createElement('div');
-  badge.className='det-badge';
-  badge.style.cssText=`background:${t.color}22;color:${t.color}`;
-  badge.textContent=t.label;
+  document.getElementById('det-title').textContent=seg.name;
+  const body=document.getElementById('det-body'); body.innerHTML='';
+  const badge=document.createElement('div'); badge.className='det-badge';
+  badge.style.cssText=`background:${t.color}22;color:${t.color}`; badge.textContent=t.label;
   body.appendChild(badge);
-  const route = document.createElement('div');
-  route.className='det-route';
+  const route=document.createElement('div'); route.className='det-route';
   const h3=document.createElement('h3'); h3.textContent=`${seg.from} ${seg.dep} → ${seg.to} ${seg.arr}`;
   const p=document.createElement('p'); p.textContent=seg.note;
-  route.appendChild(h3); route.appendChild(p);
-  body.appendChild(route);
+  route.appendChild(h3); route.appendChild(p); body.appendChild(route);
   [['tip','box-tip'],['warn','box-warn'],['info','box-info']].forEach(([k,cls])=>{
-    if (d[k]) { const el=document.createElement('div'); el.className=cls; el.textContent=d[k]; body.appendChild(el); }
+    if(d[k]){const el=document.createElement('div');el.className=cls;el.textContent=d[k];body.appendChild(el);}
   });
   document.getElementById('det').style.display='block';
 }
-function closeDet() { document.getElementById('det').style.display='none'; resetActive(); }
+function closeDet(){ document.getElementById('det').style.display='none'; resetActive(); }
 
-// =====================================================================
-// パネル構築
-// =====================================================================
-const panelBody = document.getElementById('panel-body');
-let prevDi = -1;
-for (const seg of SEGS) {
-  if (seg.di !== prevDi) {
-    const blk=document.createElement('div'); blk.className='day-block'; blk.id=`day-${seg.di}`;
-    const dl=document.createElement('div'); dl.className='day-label';
-    dl.textContent=DAY_LABELS[seg.di];
-    blk.appendChild(dl); panelBody.appendChild(blk); prevDi=seg.di;
+function buildPanel(){
+  const body=document.getElementById('panel-body');
+  let prevDi=-1;
+  for(const seg of SEGS){
+    if(seg.di!==prevDi){
+      const blk=document.createElement('div'); blk.className='day-block'; blk.id=`day-${seg.di}`;
+      const dl=document.createElement('div'); dl.className='day-label';
+      dl.textContent=DAY_LABELS[seg.di]||`Day ${seg.di+1}`;
+      blk.appendChild(dl); body.appendChild(blk); prevDi=seg.di;
+    }
+    const t=T[seg.type];
+    const blk=document.getElementById(`day-${seg.di}`);
+    const row=document.createElement('div'); row.className='seg-row'; row.id=`r-${seg.di}-${seg.si}`;
+    const nameRow=document.createElement('div'); nameRow.style.cssText='display:flex;align-items:center;';
+    const dot=document.createElement('span'); dot.className='seg-dot'; dot.style.background=t.color;
+    const nm=document.createElement('span'); nm.className='seg-name'; nm.textContent=seg.name;
+    nameRow.appendChild(dot); nameRow.appendChild(nm);
+    const tm=document.createElement('div'); tm.className='seg-time';
+    tm.innerHTML=`${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b>`;
+    const nt=document.createElement('div'); nt.className='seg-note'+(seg.warn?' warn':''); nt.textContent=seg.note;
+    const ic=document.createElement('span'); ic.className='seg-icon'; ic.id=`icon-${seg.di}-${seg.si}`;
+    ic.textContent=(seg.lineNames||seg.lineName)?'⏳':'';
+    ic.title='クリックでログ表示'; ic.onclick=(e)=>{e.stopPropagation();openLog(`${seg.di}-${seg.si}`);};
+    row.appendChild(nameRow); row.appendChild(tm); row.appendChild(nt); row.appendChild(ic);
+    row.addEventListener('click',()=>selectSeg(seg.di,seg.si));
+    blk.appendChild(row);
   }
-  const t=T[seg.type];
-  const blk=document.getElementById(`day-${seg.di}`);
-  const row=document.createElement('div'); row.className='seg-row'; row.id=`r-${seg.di}-${seg.si}`;
-  // 各要素をtextContentで構築（XSS対策）
-  const nameRow=document.createElement('div'); nameRow.style.display='flex'; nameRow.style.alignItems='center';
-  const dot=document.createElement('span'); dot.className='seg-dot'; dot.style.background=t.color;
-  const nameEl=document.createElement('span'); nameEl.className='seg-name'; nameEl.textContent=seg.name;
-  nameRow.appendChild(dot); nameRow.appendChild(nameEl);
-  const timeEl=document.createElement('div'); timeEl.className='seg-time';
-  timeEl.textContent=`${seg.from} ${seg.dep} → ${seg.to} ${seg.arr}`;
-  // 時刻の太字
-  const timeHtml = `${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b>`;
-  timeEl.innerHTML = timeHtml;
-  const noteEl=document.createElement('div'); noteEl.className='seg-note'+(seg.warn?' warn':'');
-  noteEl.textContent=seg.note;
-  const icon=document.createElement('span'); icon.className='seg-icon'; icon.id=`icon-${seg.di}-${seg.si}`;
-  icon.textContent = (seg.lineNames||seg.lineName) ? '⏳' : '';
-  row.appendChild(nameRow); row.appendChild(timeEl); row.appendChild(noteEl); row.appendChild(icon);
-  row.addEventListener('click', ()=>selectSeg(seg.di, seg.si));
-  blk.appendChild(row);
 }
-
-// 凡例
-const legBar=document.getElementById('legend');
-for (const [,t] of Object.entries(T)) {
-  const el=document.createElement('div'); el.className='leg-item';
-  const line=document.createElement('div'); line.className='leg-line'; line.style.background=t.color;
-  const label=document.createTextNode(t.label);
-  el.appendChild(line); el.appendChild(label); legBar.appendChild(el);
+function buildLegend(){
+  const lg=document.getElementById('legend');
+  for(const [,t] of Object.entries(T)){
+    const el=document.createElement('div'); el.className='leg-item';
+    const ln=document.createElement('div'); ln.className='leg-line'; ln.style.background=t.color;
+    el.appendChild(ln); el.appendChild(document.createTextNode(t.label)); lg.appendChild(el);
+  }
 }
 
 // =====================================================================
-// 読み込み実行
+// ログウィンドウ
+// =====================================================================
+function openLog(focusKey){
+  renderLog(focusKey);
+  document.getElementById('log-overlay').style.display='block';
+}
+function closeLog(){ document.getElementById('log-overlay').style.display='none'; }
+
+function renderLog(focusKey){
+  const filter=document.getElementById('log-filter').value;
+  const body=document.getElementById('log-body'); body.innerHTML='';
+
+  // サマリー
+  const keys=Object.keys(LOG);
+  const nOk=keys.filter(k=>LOG[k].result==='osm').length;
+  const nFb=keys.filter(k=>LOG[k].result==='fallback').length;
+  const nErr=keys.filter(k=>LOG[k].result==='error').length;
+  const nSkip=keys.filter(k=>LOG[k].result==='skip').length;
+  document.getElementById('log-summary').textContent =
+    `合計${keys.length}区間 / API成功(OSM描画)${nOk} ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip}`;
+
+  for(const seg of SEGS){
+    const key=`${seg.di}-${seg.si}`;
+    const lg=LOG[key];
+    if(!lg) continue;
+    if(filter==='ok' && lg.result!=='osm') continue;
+    if(filter==='fallback' && lg.result!=='fallback') continue;
+    if(filter==='error' && lg.result!=='error') continue;
+
+    const segDiv=document.createElement('div'); segDiv.className='log-seg';
+    const head=document.createElement('div');
+    const statusClass = lg.result==='osm'?'ok' : lg.result==='error'?'error' : 'fallback';
+    head.className='log-seg-head '+statusClass;
+    const icon = lg.result==='osm'?'🗺' : lg.result==='error'?'❌' : lg.result==='skip'?'➖':'⚠';
+    const total = lg.totalTime!=null ? `${lg.totalTime.toFixed(1)}秒` : '';
+    head.innerHTML=`<span class="log-seg-status">${icon}</span><span class="log-seg-name">${seg.name}</span><span class="log-seg-time">${total}</span>`;
+    const detail=document.createElement('div'); detail.className='log-detail';
+    if(focusKey===key) detail.classList.add('open');
+    detail.innerHTML = lg.steps.map(s=>{
+      const cls = s.t==='ok'?'log-ok':s.t==='warn'?'log-warn':s.t==='err'?'log-err':'log-step';
+      return `<span class="${cls}">${escapeHtml(s.msg)}</span>`;
+    }).join('\n');
+    head.onclick=()=>detail.classList.toggle('open');
+    segDiv.appendChild(head); segDiv.appendChild(detail);
+    body.appendChild(segDiv);
+    if(focusKey===key) setTimeout(()=>head.scrollIntoView({block:'center'}),50);
+  }
+}
+function escapeHtml(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+// =====================================================================
+// 全区間ロード（シリアル）
 // =====================================================================
 let done=0;
-const total=SEGS.length;
-document.getElementById('progress-label').textContent=`0/${total}`;
-
-async function loadOneSeg(seg) {
-  // 現在取得中の区間名を表示
-  document.getElementById('status-text').textContent = `取得中: ${seg.name}`;
-
-  // 1. フォールバックを即座に描画
-  putFallback(seg);
-
-// 2. OSMクエリがある区間のみ精細化
-  if ((seg.lineNames || seg.lineName) && !seg.fallbackSkip) {
-    let coords = null;
-    try {
-      coords = await fetchRailCoords(seg);
-    } catch(e) {}
-    const icon = document.getElementById(`icon-${seg.di}-${seg.si}`);
-    if (coords && coords.length >= 2) {
-      putOsm(seg, coords);
-    } else {
-      if (icon) icon.textContent = '⚠'; // 取得失敗を明示
-    }
+async function loadAll(){
+  const total=SEGS.length;
+  document.getElementById('progress-label').textContent=`0/${total}`;
+  for(const seg of SEGS){
+    await loadOneSeg(seg);
   }
-
-  done++;
-  const pct = Math.round(done/total*100);
-  document.getElementById('progress-fill').style.width = pct+'%';
-  document.getElementById('progress-label').textContent = `${done}/${total}`;
-  if (done >= total) {
-    document.getElementById('status-text').textContent = '✅ 読み込み完了';
-    // 全ルートにfitBounds
-    const allPls = Object.values(plMap).map(e=>e.osm||e.fallback).filter(Boolean);
-    if (allPls.length > 0) {
-      try { map.fitBounds(L.featureGroup(allPls).getBounds(), {padding:[20,20]}); } catch(e){}
-    }
-  } else {
-    const next = SEGS[done];
-    const detail = next ? `　次: ${next.name}` : '';
-    document.getElementById('status-text').textContent = `取得中... ${detail}`;
-  }
+  document.getElementById('status-text').textContent='✅ 読み込み完了';
+  const allPls=Object.values(plMap).map(e=>e.osm||e.fallback).filter(Boolean);
+  if(allPls.length>0){ try{ map.fitBounds(L.featureGroup(allPls).getBounds(),{padding:[20,20]}); }catch(e){} }
 }
 
-// 全区間を同時実行数制限付きで並列実行
-runWithConcurrency(SEGS.map(seg => () => loadOneSeg(seg)), CONCURRENCY);
+async function loadOneSeg(seg){
+  const key=`${seg.di}-${seg.si}`;
+  const t0=performance.now();
+  const log=[];
+  LOG[key]={steps:log, result:null, totalTime:null};
+
+  document.getElementById('status-text').textContent=`取得中: ${seg.name}`;
+
+  // fallback即描画
+  putFallback(seg);
+
+  let result='fallback';
+  if(seg.fallbackSkip){
+    result='skip';
+    log.push({t:'info', msg:'種別: fallbackSkip（新幹線/長距離/短距離特殊区間）'});
+  } else if(seg.lineNames||seg.lineName){
+    const icon=document.getElementById(`icon-${seg.di}-${seg.si}`);
+    let coords=null;
+    try { coords=await fetchRailCoords(seg, log); } catch(e){ log.push({t:'err',msg:'例外: '+e.message}); }
+    if(coords&&coords.length>=2){
+      putOsm(seg,coords);
+      result='osm';
+      log.push({t:'ok', msg:'→ APIの出力を採用して描画'});
+      if(icon)icon.textContent='🗺';
+    } else {
+      result='fallback';
+      log.push({t:'warn', msg:'→ fallback（直線/概略）を採用して描画'});
+      if(icon)icon.textContent='⚠';
+    }
+  } else {
+    result='skip';
+    log.push({t:'info', msg:'路線名指定なし → fallback直線'});
+  }
+
+  LOG[key].result = (result==='fallback' && log.some(s=>s.t==='err')) ? 'error' : result;
+  if(LOG[key].result==='error') LOG[key].result='fallback'; // エラーでもfallback描画はされている
+  // 厳密なerror判定: API試行したが全滅
+  if(result==='fallback' && (seg.lineNames||seg.lineName) && log.some(s=>s.msg.includes('データ取得失敗')||s.msg.includes('タイムアウト'))){
+    LOG[key].result='error';
+  }
+
+  LOG[key].totalTime=(performance.now()-t0)/1000;
+
+  done++;
+  const total=SEGS.length;
+  document.getElementById('progress-fill').style.width=Math.round(done/total*100)+'%';
+  document.getElementById('progress-label').textContent=`${done}/${total}`;
+}
 </script>
 </body>
 </html>
