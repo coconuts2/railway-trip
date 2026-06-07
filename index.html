@@ -793,13 +793,6 @@ async function fetchRailCoords(seg, log){
     msg:`　relation一覧: ${uniqueRels.join(', ') || '(なし)'}`
   });
 
-  const uniqueRels = [...new Set(b.relIds)];
-
-  log.push({
-    t:'warn',
-    msg:`★★ 採用chainは ${uniqueRels.length} relation を使用`
-  });
-
   return b.coords;
 }
 
