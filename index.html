@@ -459,19 +459,6 @@ function buildGraph(wayElements){
     addEdge(w.startKey, w, false);
     addEdge(w.endKey, w, true);
   }
-
-  const relSet =
-    new Set(
-      ways
-        .map(w=>w.relId)
-        .filter(v=>v!=null)
-    );
-
-  log.push({
-    t:'info',
-    msg:`　グラフ内relation数: ${relSet.size}`
-  });
-
   return {adj, ways};
 }
 
@@ -555,6 +542,20 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
           return {e, gap, turnPen, score: gap + turnPen};
         }).sort((a,b)=>a.score - b.score);
 
+  if(edges.length > 1){
+
+    console.log(
+      '[BRANCH]',
+      'node=', curKey,
+      'candidates=', scored.map(s=>({
+        rel:s.e.relId,
+        gap:Math.round(s.gap),
+        score:Math.round(s.score)
+      }))
+    );
+
+  }
+
         if(scored.length===1){
           // 分岐なし: そのまま延長
           const e=scored[0].e;
@@ -584,6 +585,16 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
       chains.push({coords, endGap:eGap, endIdx:eIdx, relIds:[...relIds], usedCount:used.size, tail:coords[coords.length-1]});
     }
   }
+
+  if(chains.length < 20){
+    console.log(
+      '[CHAIN]',
+      'gap=', Math.round(eGap),
+      'way=', used.size,
+      'rels=', [...relIds].join(',')  
+    );
+  }
+
   return chains;
 }
 
@@ -678,6 +689,30 @@ out geom;`;
       msg:`　relation ${rel}: ${cnt} way`
     });
   });
+
+  const dupWays = {};
+
+  for(const rel of rels){
+    for(const m of (rel.members||[])){
+      if(m.type !== 'way') continue;
+
+      if(!dupWays[m.ref]){
+        dupWays[m.ref] = [];
+      }
+
+      dupWays[m.ref].push(rel.id);
+    }
+  }
+
+  Object.entries(dupWays)
+    .filter(([id,rels]) => rels.length > 1)
+    .slice(0,20)
+    .forEach(([id,rels])=>{
+      log.push({
+        t:'info',
+        msg:`way ${id} belongs to ${rels.join(',')}`
+      });
+    });
 
   return {wayEls, relNames};
 }
