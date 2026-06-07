@@ -152,6 +152,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
         <option value="fallback">fallback採用のみ</option>
         <option value="error">エラーのみ</option>
       </select>
+      <button class="hbtn" onclick="downloadLog()">⬇ txt保存</button>
       <button class="hbtn" onclick="closeLog()">✕ 閉じる</button>
     </div>
     <div id="log-summary"></div>
@@ -162,14 +163,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0607-2
-//  変更点（0607-1 比）:
-//   §3-1. 方向連続性ペナルティ: 分岐スコアに「直前の進行方位からの折り返し角」を加味。
-//      gap(降車駅への距離) + turnPen(折り返しが急なほど加算) で評価し、交差路線への
-//      誤進や引き込み線・逆走を後回しにする。ソフト加点（ハード除外しない）ため、
-//      唯一の選択肢が急カーブ/スイッチバックの場合はそのまま採用される。
-//      対象: こうや(橋本で和歌山線へ西進)・たびら平戸口→佐々・阪神なんば線 等。
-//  （0607-1: narrow_gauge対応 / chain早期打ち切りの修正）
+// rail_trip_map 0607-3
+//  変更点（0607-2 比）:
+//   §3-3. chain探索をbest-firstに変更: 全初期エッジを優先度フロンティアに入れ、
+//      「端点が降車駅に最も近い枝」から展開する。従来の前進DFSは降車駅と逆向きの
+//      枝に探索予算(MAX_CHAINS)を食われ、§3-1のペナルティ誤評価と相まって
+//      和歌山線(橋本→吉野口)を迷走させていた。best-firstで降車駅方向の枝を
+//      優先探索し、こうやの修正を保ったまま和歌山線の迷走を解消する狙い。
+//   サーバ: 429/504/タイムアウト時に即・別サーバへフェイルオーバー。
+//      kumi(Private.coffee, レート制限なし)を主・overpass-api.deを副に。
+//      全サーバ混雑時のみ待機して再試行（行儀よくバックオフ）。
+//   ログ: 取得ログ画面に「⬇ txt保存」ボタンを追加（コピー不要に）。
+//  （0607-2: §3-1 方向連続性ペナルティ / 0607-1: narrow_gauge・早期打ち切り修正）
 // =====================================================================
 // 設定
 // =====================================================================
@@ -185,8 +190,8 @@ const HEADING_DIST = 80;       // 方位を求める参照距離(m)
 const TURN_SOFT = 75;          // この角度(度)以下の折れは無罰
 const TURN_PENALTY_M = 5000;   // 180°反転時のペナルティ(m相当)。TURN_SOFT→180でこの値まで線形
 const ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter", // Private.coffee運営。レート制限なし・公正共有前提
+  "https://overpass-api.de/api/interpreter",        // フェイルオーバー（429/504時）
 ];
 
 const T = {
@@ -299,10 +304,11 @@ async function fetchOverpass(query, logArr) {
   if (cached) { logArr && logArr.push({t:'cache', msg:'キャッシュHIT'}); return {data:cached, cached:true}; }
 
   for (let attempt=0; attempt<MAX_RETRY; attempt++){
-    const wait = REQUEST_INTERVAL - (Date.now()-lastReq);
-    if (wait > 0) await sleep(wait);
-
+    let rateLimited = false;
     for (const ep of ENDPOINTS){
+      const host = ep.split('/')[2];
+      const wait = REQUEST_INTERVAL - (Date.now()-lastReq);
+      if (wait > 0) await sleep(wait);
       try {
         lastReq = Date.now();
         const ctrl = new AbortController();
@@ -315,19 +321,26 @@ async function fetchOverpass(query, logArr) {
         });
         clearTimeout(timer);
         if (res.status === 429){
-          logArr && logArr.push({t:'warn', msg:`429 レート制限 → ${RETRY_WAIT/1000}秒待機 (${attempt+1}/${MAX_RETRY})`});
-          document.getElementById('status-text').textContent = `⏳ レート制限中…${RETRY_WAIT/1000}秒待機`;
-          await sleep(RETRY_WAIT);
-          break;
+          logArr && logArr.push({t:'warn', msg:`${host} → 429（混雑）→ 別サーバへ切替`});
+          rateLimited = true;
+          continue; // 次のサーバへフェイルオーバー
         }
-        if (!res.ok){ logArr && logArr.push({t:'warn', msg:`${ep.split('/')[2]} → HTTP ${res.status}`}); continue; }
+        if (!res.ok){ logArr && logArr.push({t:'warn', msg:`${host} → HTTP ${res.status} → 別サーバへ切替`}); continue; }
         const data = await res.json();
         cacheSet(query, data);
-        return {data, cached:false, endpoint:ep.split('/')[2]};
+        return {data, cached:false, endpoint:host};
       } catch(e){
         const reason = e.name==='AbortError' ? 'タイムアウト(60秒)' : e.message;
-        logArr && logArr.push({t:'err', msg:`${ep.split('/')[2]} → ${reason}`});
+        logArr && logArr.push({t:'err', msg:`${host} → ${reason} → 別サーバへ切替`});
       }
+    }
+    // 全サーバ失敗。レート制限が絡む場合のみ待機して再試行（行儀よくバックオフ）。
+    if (rateLimited && attempt < MAX_RETRY-1){
+      logArr && logArr.push({t:'warn', msg:`全サーバ混雑 → ${RETRY_WAIT/1000}秒待機して再試行 (${attempt+1}/${MAX_RETRY})`});
+      document.getElementById('status-text').textContent = `⏳ 全サーバ混雑…${RETRY_WAIT/1000}秒待機`;
+      await sleep(RETRY_WAIT);
+    } else if (!rateLimited) {
+      break; // 全滅かつレート制限以外なら再試行しても無駄
     }
   }
   return {data:null, cached:false};
@@ -473,93 +486,84 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
   const MAX_CHAINS = 40;        // chain数の上限（分岐爆発防止）
   const MAX_STEPS = 4000;       // 1 chainあたり最大way本数
 
-  // DFSスタック: {curKey, coords, usedSet, relIds, prevDistToEnd}
-  const startStack = [{
-    curKey:startKey, coords:[], used:new Set(), relIds:new Set(),
-    lastApproach: haversine(startCoord, endCoord),
-  }];
-
-  // 最初の分岐: 乗車駅ノードから出る各エッジを起点に独立chainを開始
   const firstEdges = adj.get(startKey) || [];
   if(firstEdges.length===0){
     log.push({t:'warn', msg:`　乗車駅ノードに接続するwayがありません`});
     return [];
   }
 
-  // 各初期方向ごとにDFSして、行き止まり or 降車駅到達 でchainを確定
-  for(const e0 of firstEdges){
-    if(chains.length>=MAX_CHAINS) break;
-    // 反復DFS（分岐で分割）
-    const stack=[{
-      curKey: e0.toKey,
-      coords: [...e0.coords],
-      used: new Set([e0.wayIdx]),
-      relIds: new Set(e0.relId!=null?[e0.relId]:[]),
-      minGap: haversine(e0.coords[e0.coords.length-1], endCoord),
-    }];
-    while(stack.length){
-      if(chains.length>=MAX_CHAINS) break;
-      const st = stack.pop();
-      let {curKey, coords, used, relIds, minGap} = st;
-      let steps=0;
-      // 直進できる限り進み、分岐が来たら分割
-      while(steps++ < MAX_STEPS){
-        const tail = coords[coords.length-1];
-        const endGapNow = haversine(tail, endCoord);
-        if(endGapNow < minGap) minGap = endGapNow;
-        // 降車駅近傍に入った後、最接近を過ぎて再び離れ始めたらchain確定（打ち切り）。
-        // 800m圏に入った瞬間で止めると最大800m手前で切れるため、最接近点を捉えてから止める。
-        if(minGap < NEAR_STATION && endGapNow > minGap + STOP_HYSTERESIS){
-          break;
-        }
-        // 現在ノードから出る未使用エッジ（戻り防止）
-        const edges = (adj.get(curKey)||[]).filter(e=>!used.has(e.wayIdx));
-        if(edges.length===0) break; // 行き止まり
-        // 各エッジを「降車駅に近づくか」＋「進行方向を保つか」で評価
-        const curHeading = headingInto(coords, HEADING_DIST); // 現chainの進入方位
-        const scored = edges.map(e=>{
-          const eTail = e.coords[e.coords.length-1];
-          const gap = haversine(eTail, endCoord);
-          // 方向連続性ペナルティ: 直前の進行方位から大きく折り返す候補を後回しに
-          let turnPen = 0;
-          if(curHeading!=null){
-            const outH = headingOut(e.coords, HEADING_DIST);
-            if(outH!=null){
-              const turn = angleDiff(curHeading, outH);
-              if(turn > TURN_SOFT) turnPen = (turn - TURN_SOFT)/(180 - TURN_SOFT) * TURN_PENALTY_M;
-            }
-          }
-          return {e, gap, turnPen, score: gap + turnPen};
-        }).sort((a,b)=>a.score - b.score);
+  // 全初期エッジを起点に、best-first（端点が降車駅に最も近い枝から）で探索する。
+  // 分岐爆発時もMAX_CHAINS予算を「降車駅へ向かう枝」に優先配分でき、
+  // 単純なDFSで降車駅と逆向きの枝に予算を食われる問題を避ける。
+  const frontier = firstEdges.map(e0 => ({
+    curKey: e0.toKey,
+    coords: [...e0.coords],
+    used: new Set([e0.wayIdx]),
+    relIds: new Set(e0.relId!=null?[e0.relId]:[]),
+    minGap: haversine(e0.coords[e0.coords.length-1], endCoord),
+  }));
 
-        if(scored.length===1){
-          // 分岐なし: そのまま延長
-          const e=scored[0].e;
-          coords.push(...e.coords.slice(1));
-          used=new Set(used); used.add(e.wayIdx);
-          if(e.relId!=null){ relIds=new Set(relIds); relIds.add(e.relId); }
-          curKey=e.toKey;
-          continue;
-        }
-        // 分岐あり: 最良方向を現chainで継続、他方向は新chainとしてstackに積む
-        for(let k=1;k<scored.length;k++){
-          const e=scored[k].e;
-          const ncoords=[...coords, ...e.coords.slice(1)];
-          const nused=new Set(used); nused.add(e.wayIdx);
-          const nrel=new Set(relIds); if(e.relId!=null) nrel.add(e.relId);
-          stack.push({curKey:e.toKey, coords:ncoords, used:nused, relIds:nrel, minGap});
-        }
-        const best=scored[0].e;
-        coords.push(...best.coords.slice(1));
-        used=new Set(used); used.add(best.wayIdx);
-        if(best.relId!=null){ relIds=new Set(relIds); relIds.add(best.relId); }
-        curKey=best.toKey;
-      }
-      // chain確定
-      let eGap=Infinity, eIdx=coords.length-1;
-      coords.forEach((pt,i)=>{ const d=haversine(pt,endCoord); if(d<eGap){eGap=d;eIdx=i;} });
-      chains.push({coords, endGap:eGap, endIdx:eIdx, relIds:[...relIds], usedCount:used.size, tail:coords[coords.length-1]});
+  while(frontier.length && chains.length < MAX_CHAINS){
+    // 端点が降車駅に最も近いフレームを取り出す（best-first）
+    let bi=0, bd=Infinity;
+    for(let i=0;i<frontier.length;i++){
+      const c=frontier[i].coords;
+      const d=haversine(c[c.length-1], endCoord);
+      if(d<bd){ bd=d; bi=i; }
     }
+    let {curKey, coords, used, relIds, minGap} = frontier.splice(bi,1)[0];
+    let steps=0;
+    // 直進できる限り進み、分岐が来たら分割（最良方向を継続、他はfrontierへ）
+    while(steps++ < MAX_STEPS){
+      const tail = coords[coords.length-1];
+      const endGapNow = haversine(tail, endCoord);
+      if(endGapNow < minGap) minGap = endGapNow;
+      // 降車駅近傍に入った後、最接近を過ぎて再び離れ始めたらchain確定（打ち切り）。
+      if(minGap < NEAR_STATION && endGapNow > minGap + STOP_HYSTERESIS){ break; }
+      const edges = (adj.get(curKey)||[]).filter(e=>!used.has(e.wayIdx));
+      if(edges.length===0) break; // 行き止まり
+      // 各エッジを「降車駅に近づくか」＋「進行方向を保つか」で評価
+      const curHeading = headingInto(coords, HEADING_DIST);
+      const scored = edges.map(e=>{
+        const eTail = e.coords[e.coords.length-1];
+        const gap = haversine(eTail, endCoord);
+        let turnPen = 0;
+        if(curHeading!=null){
+          const outH = headingOut(e.coords, HEADING_DIST);
+          if(outH!=null){
+            const turn = angleDiff(curHeading, outH);
+            if(turn > TURN_SOFT) turnPen = (turn - TURN_SOFT)/(180 - TURN_SOFT) * TURN_PENALTY_M;
+          }
+        }
+        return {e, gap, turnPen, score: gap + turnPen};
+      }).sort((a,b)=>a.score - b.score);
+
+      if(scored.length===1){
+        const e=scored[0].e;
+        coords.push(...e.coords.slice(1));
+        used=new Set(used); used.add(e.wayIdx);
+        if(e.relId!=null){ relIds=new Set(relIds); relIds.add(e.relId); }
+        curKey=e.toKey;
+        continue;
+      }
+      // 分岐: 最良を現chainで継続、他方向はfrontierへ
+      for(let k=1;k<scored.length;k++){
+        const e=scored[k].e;
+        const ncoords=[...coords, ...e.coords.slice(1)];
+        const nused=new Set(used); nused.add(e.wayIdx);
+        const nrel=new Set(relIds); if(e.relId!=null) nrel.add(e.relId);
+        frontier.push({curKey:e.toKey, coords:ncoords, used:nused, relIds:nrel, minGap});
+      }
+      const best=scored[0].e;
+      coords.push(...best.coords.slice(1));
+      used=new Set(used); used.add(best.wayIdx);
+      if(best.relId!=null){ relIds=new Set(relIds); relIds.add(best.relId); }
+      curKey=best.toKey;
+    }
+    // chain確定
+    let eGap=Infinity, eIdx=coords.length-1;
+    coords.forEach((pt,i)=>{ const d=haversine(pt,endCoord); if(d<eGap){eGap=d;eIdx=i;} });
+    chains.push({coords, endGap:eGap, endIdx:eIdx, relIds:[...relIds], usedCount:used.size, tail:coords[coords.length-1]});
   }
   return chains;
 }
@@ -893,6 +897,30 @@ function openLog(focusKey){
   document.getElementById('log-overlay').style.display='block';
 }
 function closeLog(){ document.getElementById('log-overlay').style.display='none'; }
+
+// ログ全体をテキスト化してダウンロード（画面のコピー不要に）
+function downloadLog(){
+  const keys=Object.keys(LOG);
+  const nOk=keys.filter(k=>LOG[k].result==='osm').length;
+  const nFb=keys.filter(k=>LOG[k].result==='fallback').length;
+  const nErr=keys.filter(k=>LOG[k].result==='error').length;
+  const nSkip=keys.filter(k=>LOG[k].result==='skip').length;
+  const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk} ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip}`];
+  for(const seg of SEGS){
+    const lg=LOG[`${seg.di}-${seg.si}`];
+    if(!lg) continue;
+    const icon = lg.result==='osm'?'🗺' : lg.result==='error'?'❌' : lg.result==='skip'?'➖':'⚠';
+    lines.push(icon, seg.name, lg.totalTime!=null?`${lg.totalTime.toFixed(1)}秒`:'');
+    for(const s of lg.steps) lines.push(s.msg);
+  }
+  const blob=new Blob([lines.join('\n')], {type:'text/plain;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const ts=new Date().toISOString().slice(0,16).replace(/[:T]/g,'');
+  a.href=url; a.download=`rail_log_${ts}.txt`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 function renderLog(focusKey){
   const filter=document.getElementById('log-filter').value;
