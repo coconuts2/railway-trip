@@ -149,6 +149,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
       <select id="log-filter" onchange="renderLog()">
         <option value="all">すべて表示</option>
         <option value="ok">API成功のみ</option>
+        <option value="strategyA">戦略A採用のみ</option>
+        <option value="strategyB">戦略B採用のみ</option>
         <option value="fallback">fallback採用のみ</option>
         <option value="error">エラーのみ</option>
       </select>
@@ -165,14 +167,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 // =====================================================================
 // rail_trip_map 0607-8
 //  変更点（0607-7=0607-3+ログ強化 比）:
-//   §3-5. 戦略A per-operator化: 取得wayを事業者(operator)タグで分け、事業者別の部分グラフ＋
-//      従来の全体(merged)で候補chainを作り、「始点・終点の両方に最も近い」候補を採用
-//      （両端到達が複数なら経路最短）。京都で近鉄とJRが交差→JR奈良線へ誤進…等の
-//      他社線への乗り移りを、mergedを残したまま抑制（mergedは常に候補なので
-//      事業者をまたぐ直通=IRいしかわ＋JR七尾線 も従来どおり拾える＝原理的に無悪化）。
-//   §3-4. NODE_MERGE 50→75m: 駅構内・会社境界の小さな分断を吸収（たびら平戸口→佐々向け）。
-//  注: あをによし/尼崎は lineNames がOSM名と不一致でwayが取れていない（近鉄奈良線→
-//      「近畿日本鉄道奈良線」、阪神本線→「阪神電気鉄道本線」）。データ側の修正が前提。
+//   ★バグ修正: buildChains末尾でループ外のeGap/used/relIdsを参照する[CHAIN]デバッグログが
+//      "eGap is not defined"例外→fallback多発を起こしていたので削除。
+//   §3-5. 戦略A per-operator化（修正版）: 取得wayを事業者(operator)で分け、事業者別の部分グラフ
+//      ＋全体(merged)で候補chainを作る。複合operator(セミコロン区切り)は各社群に重複所属。
+//      採用基準=「始点・終点の両方に到達した候補のみ採用可→経路最短」。両端到達が無ければmerged
+//      （＝従来動作・無回帰）。これで他社線への誤進入を抑えつつ、退化候補によるfallback転落を防ぐ。
+//   §3-4. NODE_MERGE 50→75m: 駅構内・会社境界の小さな分断を吸収。
+//   ログ強化: ①戦略A/B採用件数＋A不達→B試行数をサマリーに表示 ②戦略A/B採用でフィルタ可
+//      ③戦略A失敗時に終端座標・採用relation・全chainのgap分布を出力 ④chain/step上限の到達を表示。
+//      分岐診断用に[BRANCH]console.logへturn値を追加（七尾線/草津線の方向選択調査用）。
+//  注: あをによし/尼崎は lineNames とOSM名の不一致でway取得不足の可能性（データ側）。
 //  （0607-3: フェイルオーバー＋ログtxt保存 / §3-1 方向ペナルティ[こうや] / DFS）
 // =====================================================================
 // 設定
@@ -390,6 +395,8 @@ function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 function nodeKey(lat, lon){ return lat.toFixed(5)+","+lon.toFixed(5); }
 
 const NODE_MERGE = 75; // 近接端点をマージする閾値(m)。駅構内・会社境界の分断を吸収（§3-4で50→75）。
+const MAX_CHAINS = 40;  // chain数の上限（分岐爆発防止）。到達失敗時に上限到達かをログ表示。
+const MAX_STEPS = 4000; // 1 chainあたり最大way本数（step上限）。
 
 // wayElements からグラフを構築。各wayは1本のエッジ。
 // 端点は近接クラスタリングでマージ（直通運転の会社境界などで端点が数mずれても接続）。
@@ -482,8 +489,7 @@ function nearestNodeKey(adj, ways, coord){
 function buildChains(graph, startKey, startCoord, endCoord, log){
   const {adj, ways} = graph;
   const chains = [];
-  const MAX_CHAINS = 40;        // chain数の上限（分岐爆発防止）
-  const MAX_STEPS = 4000;       // 1 chainあたり最大way本数
+  // MAX_CHAINS / MAX_STEPS はモジュールレベル定数を使用
 
   // DFSスタック: {curKey, coords, usedSet, relIds, prevDistToEnd}
   const startStack = [{
@@ -545,32 +551,9 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
         }).sort((a,b)=>a.score - b.score);
 
   if(edges.length > 1){
-
-    console.log(
-      '[BRANCH]',
-      'node=', curKey,
-      'currentRels=', [...relIds],
-      scored.map(s=>({
-        rel:s.e.relId,
-        gap:Math.round(s.gap),
-        score:Math.round(s.score)
-      }))
+    console.log('[BRANCH]', 'node=', curKey, 'currentRels=', [...relIds],
+      scored.map(s=>({ rel:s.e.relId, gap:Math.round(s.gap), turn:Math.round(s.turnPen), score:Math.round(s.score) }))
     );
-
-  }
-
-  if(edges.length > 1){
-
-    console.log(
-      '[BRANCH]',
-      'node=', curKey,
-      'candidates=', scored.map(s=>({
-        rel:s.e.relId,
-        gap:Math.round(s.gap),
-        score:Math.round(s.score)
-      }))
-    );
-
   }
 
         if(scored.length===1){
@@ -596,6 +579,7 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
         if(best.relId!=null){ relIds=new Set(relIds); relIds.add(best.relId); }
         curKey=best.toKey;
       }
+      if(steps >= MAX_STEPS){ log.push({t:'warn', msg:`　step上限到達(${MAX_STEPS}) rel=[${[...relIds].join(',')||'-'}] way=${used.size}`}); }
       // chain確定
       let eGap=Infinity, eIdx=coords.length-1;
       coords.forEach((pt,i)=>{ const d=haversine(pt,endCoord); if(d<eGap){eGap=d;eIdx=i;} });
@@ -604,14 +588,8 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
     }
   }
 
-  if(chains.length < 20){
-    console.log(
-      '[CHAIN]',
-      'gap=', Math.round(eGap),
-      'way=', used.size,
-      'rels=', [...relIds].join(',')  
-    );
-  }
+  // ループ外でのeGap/used/relIds参照は未定義例外になるため削除（fallback多発の原因だった）。
+  chains.hitMaxChains = chains.length >= MAX_CHAINS; // 到達失敗時に上限到達かを呼び出し側で表示
 
   const relStats = {};
 
@@ -843,55 +821,74 @@ async function fetchRailCoords(seg, log){
     return {best, chains};
   };
 
-  // 戦略A: 事業者(operator)ごとの部分グラフ＋全体(merged)で候補を作り、最良を選ぶ。
-  //  選択基準: 始点・終点の両方に近い候補を優先（両端到達が複数なら経路最短）。
-  //  mergedを常に候補に残すので、事業者をまたぐ直通(例: IRいしかわ＋JR七尾線)も従来どおり拾える。
-  let result = null;
+  // 戦略A: 事業者(operator)別の部分グラフ＋全体(merged)で候補を作り、最良を選ぶ。
+  //  ・複合operator(セミコロン区切り)は各社の群に重複所属（近鉄京都線の地下鉄直通relation対策）。
+  //  ・採用基準: 始点・終点の両方に到達(両方<NEAR_STATION)した候補のみ採用可→経路最短を選ぶ。
+  //    両端到達が無ければmergedを採用（＝従来動作・無回帰）。事業者をまたぐ直通もmergedで拾える。
+  let result = null, adoptedStrategy = null;
   if(collectedWays.length>0){
     const byOp = new Map();
     for(const w of collectedWays){
-      const op = w._operator || '(不明)';
-      if(!byOp.has(op)) byOp.set(op, []);
-      byOp.get(op).push(w);
+      const raw = w._operator;
+      const opList = raw ? raw.split(';').map(s=>s.trim()).filter(Boolean) : ['(不明)'];
+      for(const op of opList){
+        if(!byOp.has(op)) byOp.set(op, []);
+        byOp.get(op).push(w);
+      }
     }
     const ops = [...byOp.keys()];
     const candidates = [];
     if(ops.length >= 2){
-      log.push({t:'info', msg:`　戦略A: 事業者${ops.length}群 → 事業者別＋全体で候補比較`});
+      log.push({t:'info', msg:`　戦略A: 事業者${ops.length}群 [${ops.join(' / ')}] → 事業者別＋全体で候補比較`});
       for(const [op, ways] of byOp){
         if(ways.length < 3) continue; // way数が少なすぎる群は除外
-        candidates.push({label:`戦略A[${op}]`, ways});
+        candidates.push({label:`戦略A[${op}]`, ways, merged:false});
       }
     }
-    candidates.push({label: ops.length>=2 ? '戦略A[全relation]' : '戦略A', ways: collectedWays});
-    // 「始点・終点の両方に近い」候補を優先。両端到達(両方<NEAR_STATION)が複数なら経路最短。
-    const better = (r, cur)=>{
-      const a=r.best, b=cur.best;
-      const aBoth = a.startGap<NEAR_STATION && a.endGap<NEAR_STATION;
-      const bBoth = b.startGap<NEAR_STATION && b.endGap<NEAR_STATION;
-      if(aBoth !== bBoth) return aBoth;
-      if(aBoth && bBoth) return a.routeLen < b.routeLen;
-      return (a.startGap+a.endGap) < (b.startGap+b.endGap);
-    };
-    let bestLabel=null;
+    candidates.push({label: ops.length>=2 ? '戦略A[全relation]' : '戦略A', ways: collectedWays, merged:true});
+    // 両端到達(両方<NEAR_STATION)した候補だけ採用可とし、経路最短を選ぶ。無ければmerged。
+    let mergedR = null; const reached = [];
     for(const c of candidates){
       const r = tryBuild(c.ways, c.label);
       if(!r?.best) continue;
-      if(!result || better(r, result)){ result=r; bestLabel=c.label; }
+      if(c.merged) mergedR = {r, label:c.label};
+      const bx = r.best;
+      if(bx.coords.length>=2 && bx.startGap<NEAR_STATION && bx.endGap<NEAR_STATION) reached.push({r, label:c.label});
     }
-    if(result) log.push({t:'ok', msg:`　戦略A採用候補: ${bestLabel}（始点${result.best.startGap.toFixed(0)}m / 終点${result.best.endGap.toFixed(0)}m / 経路${(result.best.routeLen/1000).toFixed(1)}km）`});
+    let bestLabel = null;
+    if(reached.length){
+      reached.sort((a,b)=>a.r.best.routeLen - b.r.best.routeLen);
+      result = reached[0].r; bestLabel = reached[0].label;
+    } else if(mergedR){
+      result = mergedR.r; bestLabel = mergedR.label;
+    }
+    if(result){
+      adoptedStrategy = 'A';
+      log.push({t:'ok', msg:`　戦略A採用候補: ${bestLabel}（始点${result.best.startGap.toFixed(0)}m / 終点${result.best.endGap.toFixed(0)}m / 経路${(result.best.routeLen/1000).toFixed(1)}km）`});
+    }
   }
 
   // 戦略Aで降車駅に届かない → 戦略B
   const insufficientA = !result?.best || result.best.endGap>NEAR_STATION;
   if(insufficientA){
+    if(result?.best){
+      const b=result.best;
+      const t=b.coords[b.coords.length-1]; // 採用chainの終端（降車駅に最も近い点）
+      const gaps=(result.chains||[]).map(c=>c.endGap).sort((x,y)=>x-y);
+      const gd=gaps.length?`best=${Math.round(gaps[0])}m / median=${Math.round(gaps[Math.floor(gaps.length/2)])}m / worst=${Math.round(gaps[gaps.length-1])}m`:'-';
+      const mw=(result.chains||[]).reduce((m,c)=>Math.max(m,c.usedCount),0);
+      const capN=(result.chains&&result.chains.hitMaxChains)?` ★chain上限到達(${MAX_CHAINS})`:'';
+      log.push({t:'warn', msg:`　戦略A終端[${t[0].toFixed(4)},${t[1].toFixed(4)}] → 降車駅[${toCoord[0].toFixed(4)},${toCoord[1].toFixed(4)}] gap=${b.endGap.toFixed(0)}m`});
+      log.push({t:'info', msg:`　　chain ${b.nChains}本(上限${MAX_CHAINS})${capN} / 最長${mw}way(step上限${MAX_STEPS}) / 採用chain relation[${b.relIds.join(',')||'-'}]`});
+      log.push({t:'info', msg:`　　全chain gap分布: ${gd}`});
+    }
     log.push({t:'warn', msg:`戦略Aで降車駅に到達できず（ギャップ ${result?.best?result.best.endGap.toFixed(0)+'m':'なし'}）→ 戦略B(エリア)を試行`});
     const resB = await strategyByArea(seg, bbox, log);
     if(resB){
       collectedWays = resB.wayEls;
       const rB = tryBuild(collectedWays, '戦略B');
       if(rB?.best && (!result?.best || rB.best.endGap < result.best.endGap)){
-        result = rB;
+        result = rB; adoptedStrategy = 'B';
         log.push({t:'ok', msg:`　→ 戦略Bの結果を採用`});
       } else {
         log.push({t:'info', msg:`　→ 戦略Aを維持`});
@@ -1078,7 +1075,10 @@ function downloadLog(){
   const nFb=keys.filter(k=>LOG[k].result==='fallback').length;
   const nErr=keys.filter(k=>LOG[k].result==='error').length;
   const nSkip=keys.filter(k=>LOG[k].result==='skip').length;
-  const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk} ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip}`];
+  const nA=keys.filter(k=>LOG[k].strategy==='A').length;
+  const nB=keys.filter(k=>LOG[k].strategy==='B').length;
+  const nAtoB=keys.filter(k=>LOG[k].aToB).length;
+  const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk}（戦略A採用 ${nA} / 戦略B採用 ${nB}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}`];
   for(const seg of SEGS){
     const lg=LOG[`${seg.di}-${seg.si}`];
     if(!lg) continue;
@@ -1105,14 +1105,19 @@ function renderLog(focusKey){
   const nFb=keys.filter(k=>LOG[k].result==='fallback').length;
   const nErr=keys.filter(k=>LOG[k].result==='error').length;
   const nSkip=keys.filter(k=>LOG[k].result==='skip').length;
+  const nA=keys.filter(k=>LOG[k].strategy==='A').length;
+  const nB=keys.filter(k=>LOG[k].strategy==='B').length;
+  const nAtoB=keys.filter(k=>LOG[k].aToB).length;
   document.getElementById('log-summary').textContent =
-    `合計${keys.length}区間 / API成功(OSM描画)${nOk} ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip}`;
+    `合計${keys.length}区間 / API成功(OSM描画)${nOk}（戦略A採用 ${nA} / 戦略B採用 ${nB}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}`;
 
   for(const seg of SEGS){
     const key=`${seg.di}-${seg.si}`;
     const lg=LOG[key];
     if(!lg) continue;
     if(filter==='ok' && lg.result!=='osm') continue;
+    if(filter==='strategyA' && lg.strategy!=='A') continue;
+    if(filter==='strategyB' && lg.strategy!=='B') continue;
     if(filter==='fallback' && lg.result!=='fallback') continue;
     if(filter==='error' && lg.result!=='error') continue;
 
@@ -1122,7 +1127,8 @@ function renderLog(focusKey){
     head.className='log-seg-head '+statusClass;
     const icon = lg.result==='osm'?'🗺' : lg.result==='error'?'❌' : lg.result==='skip'?'➖':'⚠';
     const total = lg.totalTime!=null ? `${lg.totalTime.toFixed(1)}秒` : '';
-    head.innerHTML=`<span class="log-seg-status">${icon}</span><span class="log-seg-name">${seg.name}</span><span class="log-seg-time">${total}</span>`;
+    const stratBadge = lg.strategy ? ` <b>[戦略${lg.strategy}]</b>` : '';
+    head.innerHTML=`<span class="log-seg-status">${icon}</span><span class="log-seg-name">${seg.name}${stratBadge}</span><span class="log-seg-time">${total}</span>`;
     const detail=document.createElement('div'); detail.className='log-detail';
     if(focusKey===key) detail.classList.add('open');
     detail.innerHTML = lg.steps.map(s=>{
@@ -1194,6 +1200,15 @@ async function loadOneSeg(seg){
   }
 
   LOG[key].totalTime=(performance.now()-t0)/1000;
+
+  // 採用戦略の判定（ログから）: 戦略Bを採用したか否か。OSM描画時のみA/Bを持つ。
+  if(LOG[key].result==='osm'){
+    LOG[key].strategy = log.some(s=>s.msg && s.msg.includes('戦略Bの結果を採用')) ? 'B' : 'A';
+  } else {
+    LOG[key].strategy = null;
+  }
+  // 戦略A→B移行（戦略Aが降車駅に届かず戦略Bを試行した区間）
+  LOG[key].aToB = log.some(s=>s.msg && s.msg.includes('戦略Aで降車駅に到達できず'));
 
   done++;
   const total=SEGS.length;
