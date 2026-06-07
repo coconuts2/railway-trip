@@ -547,6 +547,21 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
     console.log(
       '[BRANCH]',
       'node=', curKey,
+      'currentRels=', [...relIds],
+      scored.map(s=>({
+        rel:s.e.relId,
+        gap:Math.round(s.gap),
+        score:Math.round(s.score)
+      }))
+    );
+
+  }
+
+  if(edges.length > 1){
+
+    console.log(
+      '[BRANCH]',
+      'node=', curKey,
       'candidates=', scored.map(s=>({
         rel:s.e.relId,
         gap:Math.round(s.gap),
@@ -582,6 +597,7 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
       // chain確定
       let eGap=Infinity, eIdx=coords.length-1;
       coords.forEach((pt,i)=>{ const d=haversine(pt,endCoord); if(d<eGap){eGap=d;eIdx=i;} });
+      if(eGap > 5000){console.log('[CHAIN]','gap=', Math.round(eGap),'way=', used.size,'rels=', [...relIds].join(','));}
       chains.push({coords, endGap:eGap, endIdx:eIdx, relIds:[...relIds], usedCount:used.size, tail:coords[coords.length-1]});
     }
   }
@@ -594,6 +610,33 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
       'rels=', [...relIds].join(',')  
     );
   }
+
+  const relStats = {};
+
+  ways.forEach(w=>{
+    if(!w.relId) return;
+
+    if(!relStats[w.relId]){
+      relStats[w.relId]={
+        ways:0,
+        nodes:new Set()
+      };
+    }
+
+    relStats[w.relId].ways++;
+
+    relStats[w.relId].nodes.add(w.startKey);
+    relStats[w.relId].nodes.add(w.endKey);
+  });
+
+  Object.entries(relStats).forEach(([relId,s])=>{
+    console.log(
+      '[REL]',
+      relId,
+      'ways=', s.ways,
+      'nodes=', s.nodes.size  
+    );
+  });
 
   return chains;
 }
