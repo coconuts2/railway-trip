@@ -165,16 +165,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 // =====================================================================
 // rail_trip_map 0607-3
 //  変更点（0607-2 比）:
-//   §3-3. chain探索をbest-firstに変更: 全初期エッジを優先度フロンティアに入れ、
-//      「端点が降車駅に最も近い枝」から展開する。従来の前進DFSは降車駅と逆向きの
-//      枝に探索予算(MAX_CHAINS)を食われ、§3-1のペナルティ誤評価と相まって
-//      和歌山線(橋本→吉野口)を迷走させていた。best-firstで降車駅方向の枝を
-//      優先探索し、こうやの修正を保ったまま和歌山線の迷走を解消する狙い。
-//   サーバ: 429/504/タイムアウト時に即・別サーバへフェイルオーバー。
-//      kumi(Private.coffee, レート制限なし)を主・overpass-api.deを副に。
-//      全サーバ混雑時のみ待機して再試行（行儀よくバックオフ）。
+//   サーバ: 429/504/タイムアウト時に即・別サーバへフェイルオーバー。全サーバ混雑時のみ
+//      待機して再試行。主=overpass-api.de(内部でz/lz4へRR)、副=kumi(Private.coffee)。
 //   ログ: 取得ログ画面に「⬇ txt保存」ボタンを追加（コピー不要に）。
-//  （0607-2: §3-1 方向連続性ペナルティ / 0607-1: narrow_gauge・早期打ち切り修正）
+//   ※ §3-3 best-first探索を試したが、IRいしかわ→七尾(5m→44km)等を悪化させたため撤回。
+//      best-firstは予算を降車駅近傍の行き止まり断片に食われ、路線を分岐越しに辿り切れない。
+//      鉄道追跡はDFS(深さ優先)が適切と判断し、0607-2のDFSに復帰。§3-1(方向ペナルティ)は維持。
+//  （0607-2: §3-1 方向連続性ペナルティ[こうや修正] / 0607-1: narrow_gauge・早期打ち切り修正）
 // =====================================================================
 // 設定
 // =====================================================================
@@ -190,8 +187,8 @@ const HEADING_DIST = 80;       // 方位を求める参照距離(m)
 const TURN_SOFT = 75;          // この角度(度)以下の折れは無罰
 const TURN_PENALTY_M = 5000;   // 180°反転時のペナルティ(m相当)。TURN_SOFT→180でこの値まで線形
 const ENDPOINTS = [
-  "https://overpass.kumi.systems/api/interpreter", // Private.coffee運営。レート制限なし・公正共有前提
-  "https://overpass-api.de/api/interpreter",        // フェイルオーバー（429/504時）
+  "https://overpass-api.de/api/interpreter",         // 主（内部でz/lz4へラウンドロビン）
+  "https://overpass.kumi.systems/api/interpreter",   // フェイルオーバー（Private.coffee運営）
 ];
 
 const T = {
@@ -486,84 +483,93 @@ function buildChains(graph, startKey, startCoord, endCoord, log){
   const MAX_CHAINS = 40;        // chain数の上限（分岐爆発防止）
   const MAX_STEPS = 4000;       // 1 chainあたり最大way本数
 
+  // DFSスタック: {curKey, coords, usedSet, relIds, prevDistToEnd}
+  const startStack = [{
+    curKey:startKey, coords:[], used:new Set(), relIds:new Set(),
+    lastApproach: haversine(startCoord, endCoord),
+  }];
+
+  // 最初の分岐: 乗車駅ノードから出る各エッジを起点に独立chainを開始
   const firstEdges = adj.get(startKey) || [];
   if(firstEdges.length===0){
     log.push({t:'warn', msg:`　乗車駅ノードに接続するwayがありません`});
     return [];
   }
 
-  // 全初期エッジを起点に、best-first（端点が降車駅に最も近い枝から）で探索する。
-  // 分岐爆発時もMAX_CHAINS予算を「降車駅へ向かう枝」に優先配分でき、
-  // 単純なDFSで降車駅と逆向きの枝に予算を食われる問題を避ける。
-  const frontier = firstEdges.map(e0 => ({
-    curKey: e0.toKey,
-    coords: [...e0.coords],
-    used: new Set([e0.wayIdx]),
-    relIds: new Set(e0.relId!=null?[e0.relId]:[]),
-    minGap: haversine(e0.coords[e0.coords.length-1], endCoord),
-  }));
-
-  while(frontier.length && chains.length < MAX_CHAINS){
-    // 端点が降車駅に最も近いフレームを取り出す（best-first）
-    let bi=0, bd=Infinity;
-    for(let i=0;i<frontier.length;i++){
-      const c=frontier[i].coords;
-      const d=haversine(c[c.length-1], endCoord);
-      if(d<bd){ bd=d; bi=i; }
-    }
-    let {curKey, coords, used, relIds, minGap} = frontier.splice(bi,1)[0];
-    let steps=0;
-    // 直進できる限り進み、分岐が来たら分割（最良方向を継続、他はfrontierへ）
-    while(steps++ < MAX_STEPS){
-      const tail = coords[coords.length-1];
-      const endGapNow = haversine(tail, endCoord);
-      if(endGapNow < minGap) minGap = endGapNow;
-      // 降車駅近傍に入った後、最接近を過ぎて再び離れ始めたらchain確定（打ち切り）。
-      if(minGap < NEAR_STATION && endGapNow > minGap + STOP_HYSTERESIS){ break; }
-      const edges = (adj.get(curKey)||[]).filter(e=>!used.has(e.wayIdx));
-      if(edges.length===0) break; // 行き止まり
-      // 各エッジを「降車駅に近づくか」＋「進行方向を保つか」で評価
-      const curHeading = headingInto(coords, HEADING_DIST);
-      const scored = edges.map(e=>{
-        const eTail = e.coords[e.coords.length-1];
-        const gap = haversine(eTail, endCoord);
-        let turnPen = 0;
-        if(curHeading!=null){
-          const outH = headingOut(e.coords, HEADING_DIST);
-          if(outH!=null){
-            const turn = angleDiff(curHeading, outH);
-            if(turn > TURN_SOFT) turnPen = (turn - TURN_SOFT)/(180 - TURN_SOFT) * TURN_PENALTY_M;
-          }
+  // 各初期方向ごとにDFSして、行き止まり or 降車駅到達 でchainを確定
+  for(const e0 of firstEdges){
+    if(chains.length>=MAX_CHAINS) break;
+    // 反復DFS（分岐で分割）
+    const stack=[{
+      curKey: e0.toKey,
+      coords: [...e0.coords],
+      used: new Set([e0.wayIdx]),
+      relIds: new Set(e0.relId!=null?[e0.relId]:[]),
+      minGap: haversine(e0.coords[e0.coords.length-1], endCoord),
+    }];
+    while(stack.length){
+      if(chains.length>=MAX_CHAINS) break;
+      const st = stack.pop();
+      let {curKey, coords, used, relIds, minGap} = st;
+      let steps=0;
+      // 直進できる限り進み、分岐が来たら分割
+      while(steps++ < MAX_STEPS){
+        const tail = coords[coords.length-1];
+        const endGapNow = haversine(tail, endCoord);
+        if(endGapNow < minGap) minGap = endGapNow;
+        // 降車駅近傍に入った後、最接近を過ぎて再び離れ始めたらchain確定（打ち切り）。
+        // 800m圏に入った瞬間で止めると最大800m手前で切れるため、最接近点を捉えてから止める。
+        if(minGap < NEAR_STATION && endGapNow > minGap + STOP_HYSTERESIS){
+          break;
         }
-        return {e, gap, turnPen, score: gap + turnPen};
-      }).sort((a,b)=>a.score - b.score);
+        // 現在ノードから出る未使用エッジ（戻り防止）
+        const edges = (adj.get(curKey)||[]).filter(e=>!used.has(e.wayIdx));
+        if(edges.length===0) break; // 行き止まり
+        // 各エッジを「降車駅に近づくか」＋「進行方向を保つか」で評価
+        const curHeading = headingInto(coords, HEADING_DIST); // 現chainの進入方位
+        const scored = edges.map(e=>{
+          const eTail = e.coords[e.coords.length-1];
+          const gap = haversine(eTail, endCoord);
+          // 方向連続性ペナルティ: 直前の進行方位から大きく折り返す候補を後回しに
+          let turnPen = 0;
+          if(curHeading!=null){
+            const outH = headingOut(e.coords, HEADING_DIST);
+            if(outH!=null){
+              const turn = angleDiff(curHeading, outH);
+              if(turn > TURN_SOFT) turnPen = (turn - TURN_SOFT)/(180 - TURN_SOFT) * TURN_PENALTY_M;
+            }
+          }
+          return {e, gap, turnPen, score: gap + turnPen};
+        }).sort((a,b)=>a.score - b.score);
 
-      if(scored.length===1){
-        const e=scored[0].e;
-        coords.push(...e.coords.slice(1));
-        used=new Set(used); used.add(e.wayIdx);
-        if(e.relId!=null){ relIds=new Set(relIds); relIds.add(e.relId); }
-        curKey=e.toKey;
-        continue;
+        if(scored.length===1){
+          // 分岐なし: そのまま延長
+          const e=scored[0].e;
+          coords.push(...e.coords.slice(1));
+          used=new Set(used); used.add(e.wayIdx);
+          if(e.relId!=null){ relIds=new Set(relIds); relIds.add(e.relId); }
+          curKey=e.toKey;
+          continue;
+        }
+        // 分岐あり: 最良方向を現chainで継続、他方向は新chainとしてstackに積む
+        for(let k=1;k<scored.length;k++){
+          const e=scored[k].e;
+          const ncoords=[...coords, ...e.coords.slice(1)];
+          const nused=new Set(used); nused.add(e.wayIdx);
+          const nrel=new Set(relIds); if(e.relId!=null) nrel.add(e.relId);
+          stack.push({curKey:e.toKey, coords:ncoords, used:nused, relIds:nrel, minGap});
+        }
+        const best=scored[0].e;
+        coords.push(...best.coords.slice(1));
+        used=new Set(used); used.add(best.wayIdx);
+        if(best.relId!=null){ relIds=new Set(relIds); relIds.add(best.relId); }
+        curKey=best.toKey;
       }
-      // 分岐: 最良を現chainで継続、他方向はfrontierへ
-      for(let k=1;k<scored.length;k++){
-        const e=scored[k].e;
-        const ncoords=[...coords, ...e.coords.slice(1)];
-        const nused=new Set(used); nused.add(e.wayIdx);
-        const nrel=new Set(relIds); if(e.relId!=null) nrel.add(e.relId);
-        frontier.push({curKey:e.toKey, coords:ncoords, used:nused, relIds:nrel, minGap});
-      }
-      const best=scored[0].e;
-      coords.push(...best.coords.slice(1));
-      used=new Set(used); used.add(best.wayIdx);
-      if(best.relId!=null){ relIds=new Set(relIds); relIds.add(best.relId); }
-      curKey=best.toKey;
+      // chain確定
+      let eGap=Infinity, eIdx=coords.length-1;
+      coords.forEach((pt,i)=>{ const d=haversine(pt,endCoord); if(d<eGap){eGap=d;eIdx=i;} });
+      chains.push({coords, endGap:eGap, endIdx:eIdx, relIds:[...relIds], usedCount:used.size, tail:coords[coords.length-1]});
     }
-    // chain確定
-    let eGap=Infinity, eIdx=coords.length-1;
-    coords.forEach((pt,i)=>{ const d=haversine(pt,endCoord); if(d<eGap){eGap=d;eIdx=i;} });
-    chains.push({coords, endGap:eGap, endIdx:eIdx, relIds:[...relIds], usedCount:used.size, tail:coords[coords.length-1]});
   }
   return chains;
 }
