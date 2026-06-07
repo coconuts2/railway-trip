@@ -459,6 +459,19 @@ function buildGraph(wayElements){
     addEdge(w.startKey, w, false);
     addEdge(w.endKey, w, true);
   }
+
+  const relSet =
+    new Set(
+      ways
+        .map(w=>w.relId)
+        .filter(v=>v!=null)
+    );
+
+  log.push({
+    t:'info',
+    msg:`　グラフ内relation数: ${relSet.size}`
+  });
+
   return {adj, ways};
 }
 
@@ -646,6 +659,26 @@ out geom;`;
   log.push({t:'info', msg:`　relationID: ${relIds.join(', ')||'なし'}`});
   log.push({t:'info', msg:`　取得way数: ${wayEls.length}`});
   if(wayEls.length===0) return null;
+
+  const relStats = {};
+
+  wayEls.forEach(w=>{
+    const r = w._relId ?? 'null';
+
+    if(!relStats[r]){
+      relStats[r]=0;
+    }
+
+    relStats[r]++;
+  });
+
+  Object.entries(relStats).forEach(([rel,cnt])=>{
+    log.push({
+      t:'info',
+      msg:`　relation ${rel}: ${cnt} way`
+    });
+  });
+
   return {wayEls, relNames};
 }
 
