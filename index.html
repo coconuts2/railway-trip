@@ -566,11 +566,27 @@ function calcBbox(seg){
 async function strategyByLineName(seg, bbox, log){
   const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
   if(lineNames.length===0) return null;
-  const [S,W,N,E]=bbox;
+  // 【高速化】bboxの代わりに発着駅それぞれの±0.01°（≈1.1km）の小さいbboxを使う（挟み撃ち方式）。
+  // 発駅bbox ∪ 着駅bbox を1クエリのunionで送ることで、relation名前検索の範囲を極限まで絞る。
+  // way(r)は取得したrelationの全メンバーwayを返すのでbbox外の区間も取れる（例: 金沢→七尾の
+  // 七尾線wayは金沢bbboxに入らないが、着駅(七尾)bbboxで七尾線relationを補足できる）。
+  const dep = seg.fallback?.[0];
+  const arr = seg.fallback?.[seg.fallback.length-1];
+  if(!dep || !arr) return null;
+  const delta = 0.01; // ±0.01°≈1.1km
+  const fmt = v => v.toFixed(5);
+  const depBox = `${fmt(dep[0]-delta)},${fmt(dep[1]-delta)},${fmt(dep[0]+delta)},${fmt(dep[1]+delta)}`;
+  const arrBox = `${fmt(arr[0]-delta)},${fmt(arr[1]-delta)},${fmt(arr[0]+delta)},${fmt(arr[1]+delta)}`;
+  const isSamePoint = dep[0]===arr[0] && dep[1]===arr[1];
   const nameRegex = lineNames.map(escapeRegex).join("|");
+  const routeType = `"route"~"train|tram|light_rail|monorail|subway|railway"`;
+  const nameCond  = `"name"~"${nameRegex}"`;
   // relationのメンバー情報も取得して、各wayがどのrelation由来か分かるようにする
-  const q=`[out:json][timeout:30];
-relation["route"~"train|tram|light_rail|monorail|subway|railway"]["name"~"${nameRegex}"](${S},${W},${N},${E});
+  const q=`[out:json][timeout:15];
+(
+  relation[${routeType}][${nameCond}](${depBox});${isSamePoint ? '' : `
+  relation[${routeType}][${nameCond}](${arrBox});`}
+);
 out body;
 way(r)["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"];
 out geom;`;
