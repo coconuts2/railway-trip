@@ -165,8 +165,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0607-9
-//  ★大改修: 経路探索を chain-DFS から「最短経路(Dijkstra)」へ全面置換。
+// rail_trip_map 0609-2
+//  ★0609-2: 戦略Aのway取得を「2段階・relation別フェッチ」に変更。
+//    Step1: 発着駅の小bbox(union)で名前一致relationの ID＋タグのみ取得(out tags;・軽量)。
+//    Step2: relation IDごとに relation(id:R); way(r); out geom; を個別実行(1 relation=1クエリ)。
+//    狙い: 全way×全nodeのlookupを1クエリに集中させない→504/timeout回避。APIコール数は
+//    1(Step1)+relation数。各クエリは小さく完走しやすい。wayは_relIdでrelation別に追跡し、
+//    複数relation共有wayはwayId先勝ちで排除。マージはグラフ構築時のみ(Dijkstraは全wayの
+//    結合グラフ上で最短経路を求めるため事業者跨ぎ直通もそのまま解ける)。新キャッシュ層は
+//    追加せず既存fetchOverpass(クエリ文字列キー)のみ。戦略B(エリア)・描画系は変更なし。
+//  ★0607-9 大改修: 経路探索を chain-DFS から「最短経路(Dijkstra)」へ全面置換。
 //   buildChains/pickBestChain/per-operator選択/§3-1方向ペナルティ/chain延長 を廃止し、
 //   buildGraph のノードグラフ上で「起点ノード→終点ノードの最短経路」を求める方式に変更。
 //   理由: 北陸テストで①金沢→七尾(分岐爆発でchain上限に当たり到達不可→戦略B 201km・新幹線混入)、
@@ -562,14 +570,17 @@ function calcBbox(seg){
   return [mnLat-pad, mnLon-pad, mxLat+pad, mxLon+pad];
 }
 
-// 戦略A: 路線名でrelation取得（relation別にwayをタグ付け）
+// 戦略A: 路線名でrelation取得（2段階・relation別フェッチ）
+//  Step1: 発着駅の小bbox(union)で名前一致relationの ID＋タグのみ取得（out tags; ＝軽量）。
+//  Step2: relation IDごとに  relation(id:R); way(r); out geom;  を個別実行（1 relation=1クエリ）。
+//  狙い: 全way×全nodeのlookupを1クエリに集中させない → 504/timeout回避。
+//        APIコール数は 1(Step1) + relation数。各クエリは小さく完走しやすい。
+//  wayは取得時に自然分離（_relId付与）。複数relation共有wayはwayId先勝ちで排除。
+//  マージはグラフ構築時のみ（Dijkstraは全wayの結合グラフ上で最短経路を求めるため、
+//  事業者跨ぎの直通（IRいしかわ→JR七尾線等）もそのまま解ける）。
 async function strategyByLineName(seg, bbox, log){
   const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
   if(lineNames.length===0) return null;
-  // 【高速化】bboxの代わりに発着駅それぞれの±0.01°（≈1.1km）の小さいbboxを使う（挟み撃ち方式）。
-  // 発駅bbox ∪ 着駅bbox を1クエリのunionで送ることで、relation名前検索の範囲を極限まで絞る。
-  // way(r)は取得したrelationの全メンバーwayを返すのでbbox外の区間も取れる（例: 金沢→七尾の
-  // 七尾線wayは金沢bbboxに入らないが、着駅(七尾)bbboxで七尾線relationを補足できる）。
   const dep = seg.fallback?.[0];
   const arr = seg.fallback?.[seg.fallback.length-1];
   if(!dep || !arr) return null;
@@ -581,91 +592,83 @@ async function strategyByLineName(seg, bbox, log){
   const nameRegex = lineNames.map(escapeRegex).join("|");
   const routeType = `"route"~"train|tram|light_rail|monorail|subway|railway"`;
   const nameCond  = `"name"~"${nameRegex}"`;
-  // relationのメンバー情報も取得して、各wayがどのrelation由来か分かるようにする
-  const q=`[out:json][timeout:15];
+
+  // ---- Step1: relationの ID＋タグのみ（geometry無し＝軽量） ----
+  const q1=`[out:json][timeout:10];
 (
   relation[${routeType}][${nameCond}](${depBox});${isSamePoint ? '' : `
   relation[${routeType}][${nameCond}](${arrBox});`}
 );
-out body;
-way(r)["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"];
-out geom;`;
-  const t0=performance.now();
-  const {data, cached, endpoint} = await fetchOverpass(q, log);
-  const dt=((performance.now()-t0)/1000).toFixed(1);
-  if(!data?.elements){
-    log.push({t:'err', msg:`戦略A: データ取得失敗 (${dt}秒)`});
+out tags;`;
+  const t1=performance.now();
+  const r1 = await fetchOverpass(q1, log);
+  const dt1=((performance.now()-t1)/1000).toFixed(1);
+  if(!r1.data?.elements){
+    log.push({t:'err', msg:`戦略A Step1: relation検索失敗 (${dt1}秒)`});
     return null;
   }
-  // relationのメンバー構成から way→relId のマップを作る
-  const rels = data.elements.filter(e=>e.type==='relation');
-  const wayToRel = new Map();
+  const rels = r1.data.elements.filter(e=>e.type==='relation');
+  const relInfo = new Map(); // relId -> {name, operator}
   for(const rel of rels){
-    for(const m of (rel.members||[])){
-      if(m.type==='way' && !wayToRel.has(m.ref)) wayToRel.set(m.ref, rel.id);
-    }
+    relInfo.set(rel.id, {
+      name: rel.tags?.name || null,
+      operator: rel.tags?.operator || rel.tags?.network || null,
+    });
   }
-  // relId → 事業者(operator) のマップ（per-operator分離用）
-  const relOp = new Map();
-  for(const rel of rels){ relOp.set(rel.id, rel.tags?.operator || rel.tags?.network || null); }
-  const relNames=[...new Set(rels.map(e=>e.tags?.name).filter(Boolean))];
   const relIds = rels.map(e=>e.id);
-  let wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
-  // 各wayにrelId・事業者を付与
-  wayEls.forEach(w=>{ w._relId = wayToRel.get(w.id) ?? null; w._operator = (w._relId!=null ? (relOp.get(w._relId)||null) : null); });
-  log.push({t:'ok', msg:`戦略A: ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から取得 (${dt}秒)`});
+  const relNames = [...new Set(rels.map(e=>e.tags?.name).filter(Boolean))];
+  log.push({t:'ok', msg:`戦略A Step1: ${r1.cached?'キャッシュ':'API'+(r1.endpoint?'('+r1.endpoint+')':'')}から relation ${relIds.length}件 (${dt1}秒)`});
   log.push({t:'info', msg:`　検索路線名: ${lineNames.join(' / ')}`});
   log.push({t:'info', msg:`　OSM一致relation(${relNames.length}): ${relNames.join(' / ')||'(なし)'}`});
   log.push({t:'info', msg:`　relationID: ${relIds.join(', ')||'なし'}`});
-  log.push({t:'info', msg:`　取得way数: ${wayEls.length}`});
-  const opsFound = [...new Set(wayEls.map(w=>w._operator).filter(Boolean))];
-  log.push({t:'info', msg:`　事業者(operator): ${opsFound.join(' / ')||'(タグなし)'}`});
-  if(wayEls.length===0) return null;
+  if(relIds.length===0) return null;
+  log.push({t:'info', msg:`戦略A Step2: relation別に ${relIds.length}回のwayクエリを実行（API計 1+${relIds.length}回）`});
 
-  const relStats = {};
-
-  wayEls.forEach(w=>{
-    const r = w._relId ?? 'null';
-
-    if(!relStats[r]){
-      relStats[r]=0;
+  // ---- Step2: relation別に way の geometry を個別取得（relation(id:R); way(r); out geom;） ----
+  const seen = new Set();   // wayId重複排除（複数relationが同一wayを共有する場合・先勝ち）
+  const allWays = [];
+  for(let i=0;i<relIds.length;i++){
+    const rid=relIds[i];
+    const info=relInfo.get(rid)||{};
+    const q2=`[out:json][timeout:25];
+relation(id:${rid});
+way(r)["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"];
+out geom;`;
+    const t2=performance.now();
+    const r2 = await fetchOverpass(q2, log);
+    const dt2=((performance.now()-t2)/1000).toFixed(1);
+    if(!r2.data?.elements){
+      log.push({t:'warn', msg:`　[${i+1}/${relIds.length}] relation ${rid}（${info.name||'?'}）: way取得失敗 (${dt2}秒) → スキップ`});
+      continue;
     }
-
-    relStats[r]++;
-  });
-
-  Object.entries(relStats).forEach(([rel,cnt])=>{
-    log.push({
-      t:'info',
-      msg:`　relation ${rel}: ${cnt} way`
-    });
-  });
-
-  const dupWays = {};
-
-  for(const rel of rels){
-    for(const m of (rel.members||[])){
-      if(m.type !== 'way') continue;
-
-      if(!dupWays[m.ref]){
-        dupWays[m.ref] = [];
-      }
-
-      dupWays[m.ref].push(rel.id);
+    const ways=r2.data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+    let added=0;
+    for(const w of ways){
+      if(seen.has(w.id)) continue; // 既に別relationで取得済みのway
+      seen.add(w.id);
+      w._relId=rid;
+      w._operator=info.operator||null;
+      allWays.push(w);
+      added++;
     }
+    const src = r2.cached?'cache':(r2.endpoint||'api');
+    log.push({t:'info', msg:`　[${i+1}/${relIds.length}] relation ${rid}（${info.name||'?'}）: ${ways.length}way / 新規${added} (${src}, ${dt2}秒)`});
   }
 
-  Object.entries(dupWays)
-    .filter(([id,rels]) => rels.length > 1)
-    .slice(0,20)
-    .forEach(([id,rels])=>{
-      log.push({
-        t:'info',
-        msg:`way ${id} belongs to ${rels.join(',')}`
-      });
-    });
+  if(allWays.length===0){
+    log.push({t:'warn', msg:`戦略A: 全relationでway取得できず`});
+    return null;
+  }
+  log.push({t:'ok', msg:`戦略A: 計${allWays.length}way（重複排除後）/ relation ${relIds.length}件をマージ`});
+  const opsFound=[...new Set(allWays.map(w=>w._operator).filter(Boolean))];
+  log.push({t:'info', msg:`　事業者(operator): ${opsFound.join(' / ')||'(タグなし)'}`});
 
-  return {wayEls, relNames};
+  // relation別 way数の内訳
+  const relStats={};
+  allWays.forEach(w=>{ const r=w._relId??'null'; relStats[r]=(relStats[r]||0)+1; });
+  Object.entries(relStats).forEach(([rel,cnt])=>{ log.push({t:'info', msg:`　relation ${rel}: ${cnt} way`}); });
+
+  return {wayEls:allWays, relNames};
 }
 
 // 戦略B: 乗降駅周辺の全鉄道way（路線名非依存）
