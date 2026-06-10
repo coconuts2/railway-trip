@@ -216,9 +216,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 // =====================================================================
 const CACHE_TTL = 7*24*60*60*1000;
 const REQUEST_INTERVAL = 2000;
-const RETRY_WAIT = 30000;
+const RETRY_WAIT = 10000;
 const MAX_RETRY = 3;
-const FETCH_TIMEOUT = 30000;   // [timeout:N]指定が無いクエリの既定(ms)。クライアントは N秒+5秒 で打ち切り
+const FETCH_TIMEOUT = 10000;   // [timeout:N]指定が無いクエリの既定(ms)。クライアントは N秒+5秒 で打ち切り
 const NEAR_STATION = 800;      // 端点が駅とみなせる距離(m)
 const ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",         // 主（内部でz/lz4へラウンドロビン）
