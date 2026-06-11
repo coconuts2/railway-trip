@@ -169,7 +169,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0609-4
+// rail_trip_map 0611-1
+//  ★0611-1: ①再試行条件の拡張（最重要）: 429のみ→「429／5xx（504含む）／タイムアウト／ネットワーク
+//      エラー」すべてを再試行対象に。Step1もStep2(relation別way取得)もfetchOverpass経由なので
+//      両方に効く。RETRY_WAIT=10秒×MAX_RETRY=3。4xx（429以外）はクエリ自体の問題なので即終了。
+//    ②relCacheSetの座標を5桁丸め（≒1.1m精度）で保存し容量を15〜20%節約。nodeKeyが元々
+//      toFixed(5)量子化なのでグラフ接続・NODE_MERGE・描画への影響はゼロ（キーは丸め前後で同一）。
+//      既存キャッシュ（7桁）との混在も透過に動作。
 //  ★0609-4: 0609-3のレビュー改善版。
 //    ①クライアント側タイムアウトを各クエリの[timeout:N]+5秒に修正（戦略Bの40秒クエリが一律30秒で
 //      打ち切られていた不整合を解消。Step1は15秒で即諦め、デッドサーバでの無駄待ちを短縮）。
@@ -385,7 +391,8 @@ function relCacheGet(relId){
 }
 function relCacheSet(relId, ways){
   try {
-    const slim = ways.map(w=>({id:w.id, geometry:w.geometry})); // タグ等を捨てて容量節約
+    // タグ等を捨て、座標は5桁丸め（≒1.1m）で容量節約。nodeKeyはtoFixed(5)なのでトポロジー不変。
+    const slim = ways.map(w=>({id:w.id, geometry:w.geometry.map(g=>({lat:+g.lat.toFixed(5), lon:+g.lon.toFixed(5)}))}));
     return lsSetSmart(relCacheKey(relId), JSON.stringify({ts:Date.now(), ways:slim}), ["osm_","osmrel_"]);
   } catch(e){ return false; }
 }
@@ -431,7 +438,7 @@ async function fetchOverpass(query, logArr, opts={}) {
   const activeEndpoints = ENDPOINTS.filter(ep => USE_KUMI || !ep.includes('kumi.systems'));
 
   for (let attempt=0; attempt<MAX_RETRY; attempt++){
-    let rateLimited = false;
+    let retryable = false;  // 429/5xx/タイムアウト/ネットワークエラーは一時的とみなし再試行
     for (const ep of activeEndpoints){
       const host = ep.split('/')[2];
       const wait = REQUEST_INTERVAL - (Date.now()-lastReq);
@@ -449,25 +456,30 @@ async function fetchOverpass(query, logArr, opts={}) {
         clearTimeout(timer);
         if (res.status === 429){
           logArr && logArr.push({t:'warn', msg:`${host} → 429（混雑）→ 別サーバへ切替`});
-          rateLimited = true;
+          retryable = true;
           continue; // 次のサーバへフェイルオーバー
         }
-        if (!res.ok){ logArr && logArr.push({t:'warn', msg:`${host} → HTTP ${res.status} → 別サーバへ切替`}); continue; }
+        if (!res.ok){
+          if (res.status >= 500) retryable = true;  // 504等のサーバ側エラーは再試行
+          logArr && logArr.push({t:'warn', msg:`${host} → HTTP ${res.status} → 別サーバへ切替`});
+          continue;
+        }
         const data = await res.json();
         if (!opts.noCache) cacheSet(query, data);
         return {data, cached:false, endpoint:host};
       } catch(e){
         const reason = e.name==='AbortError' ? `タイムアウト(${clientTimeout/1000}秒)` : e.message;
         logArr && logArr.push({t:'err', msg:`${host} → ${reason} → 別サーバへ切替`});
+        retryable = true;  // タイムアウト・ネットワークエラーも一時的とみなし再試行
       }
     }
-    // 全サーバ失敗。レート制限が絡む場合のみ待機して再試行（行儀よくバックオフ）。
-    if (rateLimited && attempt < MAX_RETRY-1){
-      logArr && logArr.push({t:'warn', msg:`全サーバ混雑 → ${RETRY_WAIT/1000}秒待機して再試行 (${attempt+1}/${MAX_RETRY})`});
-      document.getElementById('status-text').textContent = `⏳ 全サーバ混雑…${RETRY_WAIT/1000}秒待機`;
+    // 全サーバ失敗。一時的エラー（429/5xx/timeout/network）なら待機して再試行。
+    if (retryable && attempt < MAX_RETRY-1){
+      logArr && logArr.push({t:'warn', msg:`サーバ混雑/エラー → ${RETRY_WAIT/1000}秒待機して再試行 (${attempt+1}/${MAX_RETRY})`});
+      document.getElementById('status-text').textContent = `⏳ サーバ混雑/エラー…${RETRY_WAIT/1000}秒待機`;
       await sleep(RETRY_WAIT);
-    } else if (!rateLimited) {
-      break; // 全滅かつレート制限以外なら再試行しても無駄
+    } else if (!retryable) {
+      break; // 4xx等：クエリ自体の問題なので再試行しても無駄
     }
   }
   return {data:null, cached:false};
