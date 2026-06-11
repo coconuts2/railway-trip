@@ -629,16 +629,16 @@ function dijkstraRoute(graph, startKey, endKey){
       if(nd<(dist.get(e.toKey)??Infinity)){ dist.set(e.toKey,nd); prev.set(e.toKey,{from:u,edge:e}); pq.push(e.toKey,nd); }
     }
   }
-  if(startKey===endKey || !prev.has(endKey)) return {found:false, reached:done};
+  if(startKey===endKey || !prev.has(endKey)) return {found:false, reached:done, dist, prev};
   // 経路復元（start→end）。各辺のcoordsはfrom→toに整列済み。
   const edges=[]; let cur=endKey;
-  while(cur!==startKey){ const p=prev.get(cur); if(!p) return {found:false, reached:done}; edges.unshift(p.edge); cur=p.from; }
+  while(cur!==startKey){ const p=prev.get(cur); if(!p) return {found:false, reached:done, dist, prev}; edges.unshift(p.edge); cur=p.from; }
   const coords=[]; const relIds=new Set();
   for(const e of edges){
     if(coords.length===0) coords.push(...e.coords); else coords.push(...e.coords.slice(1));
     if(e.relId!=null) relIds.add(e.relId);
   }
-  return {found:true, coords, routeLen:dist.get(endKey), relIds, hops:edges.length, reached:done};
+  return {found:true, coords, routeLen:dist.get(endKey), relIds, hops:edges.length, reached:done, dist, prev};
 }
 
 // ノードキー→代表座標（分断箇所診断用）
@@ -649,9 +649,9 @@ function nodeCoordMap(ways){
 }
 // 到達可能ノードのうち目標座標に最も近い点（＝分断箇所の手前）
 function nearestReachable(reached, ncoord, target){
-  let best=null,bd=Infinity;
-  for(const k of reached){ const c=ncoord.get(k); if(!c) continue; const d=haversine(c,target); if(d<bd){bd=d;best=c;} }
-  return best?{coord:best,gap:bd}:null;
+  let best=null,bd=Infinity,bk=null;
+  for(const k of reached){ const c=ncoord.get(k); if(!c) continue; const d=haversine(c,target); if(d<bd){bd=d;best=c;bk=k;} }
+  return best?{coord:best,gap:bd,key:bk}:null;
 }
 
 function calcBbox(seg){
@@ -839,8 +839,29 @@ async function fetchRailCoords(seg, log){
     log.push({t:'info', msg:`　${label}: 乗車駅スナップ ${s.dist.toFixed(0)}m / 降車駅スナップ ${e.dist.toFixed(0)}m / ノード数 ${graph.adj.size} / way数 ${graph.ways.length}`});
     const r = dijkstraRoute(graph, s.key, e.key);
     if(!r.found){
-      // 経路なし＝起点と終点が非連結。分断箇所（到達範囲の降車駅最近接点）を報告。
+      // 経路なし＝非連結。到達範囲内の降車駅最近接ノードをNEAR_STATION以内なら代替終点として採用。
       const near = nearestReachable(r.reached, nodeCoordMap(graph.ways), toCoord);
+      if(near && near.gap <= NEAR_STATION){
+        log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 最近接到達ノード(${near.gap.toFixed(0)}m手前)で代替経路を復元`});
+        // prevマップを使って起点→nearKeyの経路を復元
+        const edges = []; let cur = near.key;
+        while(cur !== s.key){
+          const p = r.prev.get(cur);
+          if(!p) break;
+          edges.unshift(p.edge); cur = p.from;
+        }
+        if(edges.length > 0){
+          const coords = []; const relIds = new Set();
+          for(const edge of edges){
+            if(coords.length === 0) coords.push(...edge.coords);
+            else coords.push(...edge.coords.slice(1));
+            if(edge.relId != null) relIds.add(edge.relId);
+          }
+          const routeLen = r.dist.get(near.key) || 0;
+          log.push({t:'ok', msg:`　${label}: 代替経路 経路長 ${(routeLen/1000).toFixed(1)}km / 区間${edges.length} / relation[${[...relIds].join(',')||'-'}]`});
+          return {coords, startGap:s.dist, endGap:near.gap, routeLen, relIds:[...relIds], isNearFallback:true};
+        }
+      }
       log.push({t:'warn', msg:`　${label}: 経路なし（起点と終点が非連結）`});
       if(near) log.push({t:'info', msg:`　　起点側到達範囲の降車駅最近接 [${near.coord[0].toFixed(4)},${near.coord[1].toFixed(4)}] が降車駅から ${near.gap.toFixed(0)}m（この付近で分断の可能性）`});
       return null;
