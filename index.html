@@ -23,7 +23,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #ph h2{font-size:12px;font-weight:600;color:#222;}
 #ph p{margin-top:2px;font-size:10px;color:#888;}
 .day-block{border-bottom:1px solid #eee;}
-.day-label{padding:4px 12px;font-size:11px;font-weight:600;color:#555;background:#f8f8f5;}
+.day-label{padding:4px 12px;font-size:11px;font-weight:600;color:#555;background:#f8f8f5;display:flex;align-items:center;gap:6px;}
+.day-label input{cursor:pointer;margin:0;flex-shrink:0;}
+.day-label .dl-text{flex:1;cursor:pointer;}
+#ph-all{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#555;cursor:pointer;}
+#ph-all input{cursor:pointer;margin:0;}
 .seg-row{padding:5px 30px 5px 16px;cursor:pointer;border-top:1px solid #f0f0f0;position:relative;}
 .seg-row:hover{background:#f5f5f0;}
 .seg-row.active{background:#eef4ff;outline:2px solid #4477cc;outline-offset:-2px;}
@@ -134,7 +138,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <div id="main">
   <div id="map"></div>
   <div id="panel">
-    <div id="ph"><h2>全行程</h2><p>クリックで地図ズーム・詳細を表示</p></div>
+    <div id="ph"><h2>全行程</h2><p>クリックで地図ズーム・詳細を表示</p><label id="ph-all"><input type="checkbox" id="chk-all-days" checked onchange="toggleAllDays(this.checked)">全日表示</label></div>
     <div id="panel-body"></div>
   </div>
   <div id="det">
@@ -153,8 +157,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
       <select id="log-filter" onchange="renderLog()">
         <option value="all">すべて表示</option>
         <option value="ok">API成功のみ</option>
+        <option value="fast">高速パス採用のみ</option>
         <option value="strategyA">戦略A採用のみ</option>
         <option value="strategyB">戦略B採用のみ</option>
+        <option value="partial">部分描画のみ</option>
         <option value="fallback">fallback採用のみ</option>
         <option value="error">エラーのみ</option>
       </select>
@@ -169,7 +175,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0611-1
+// rail_trip_map 0613-1
+//  ★0613-1: ①日別表示チェックボックス: パネルの日ラベルにON/OFF、パネル上部に「全日表示」一括。
+//      地図上の線（OSM/fallback/接続線）を日単位で表示切替（ロード進行中の切替にも追従）。
+//    ②経由駅 via 対応: seg.via = [["駅名", lat, lon, "路線名候補1", ...], ...]。
+//      Step1検索bboxに経由駅±0.01°のboxを追加し、路線名候補もlineNamesに統合して検索。
+//      乗降駅bboxに目的relationが掛からない区間（名阪特急の大阪線・直通特急の山陽電鉄等）に対応。
+//      osmseg_キー署名にviaを含めるため、via追加・変更で当該区間のキャッシュは自動失効。
+//    ③キャッシュ専用高速パス: 前回採用relation(osmseg_)が全てキャッシュ（セッション/relcache・
+//      部分キャッシュ可）に揃っていれば Step1(API) もスキップして即グラフ構築→Dijkstra。
+//      両端ギャップ≦FAST_SNAP(200m)なら採用（厳格条件で誤経路の再生を防止）。
+//      不成立なら osmseg_ を破棄して通常フロー（全relation再取得）へ。
+//    ④不達区間の部分描画: 経路が駅まで届かない場合（非連結／ギャップ>NEAR_STATION）も、
+//      到達できた所までの経路を実線描画し、端点→駅を赤点線コネクタで接続（採用way・分断箇所の
+//      目視デバッグ用）。ログ区分「部分描画🔶」を追加。部分結果はキャッシュ保存しない。
+//    ⑤大型relationの間引き保存: way数>LARGE_REL_WAYS(400)のrelationは「採用経路で実際に
+//      使ったway」だけを osmrel_ に保存(p:1フラグ)。同一relationを複数区間で使う場合はway id
+//      単位でマージ蓄積。部分キャッシュは高速パス(③)専用。通常Step2では完全版が必要なため
+//      キャッシュミス扱い→API再取得（SESSION_REL_GEOMに完全版があればそれを優先）。
+//    ⑥退避(evict)時に「いずれかの区間で採用中(osmseg_記載)のrelation」を保護。
+//      非保護→保護の順で追い出し、「次回も使うrelationの追い出し→API再取得」の悪循環を防ぐ。
+//    （座標5桁丸め保存(≒1.1m精度)は0611-1で実装済み）
+//  （旧: 0611-1）
 //  ★0611-1: ①再試行条件の拡張（最重要）: 429のみ→「429／5xx（504含む）／タイムアウト／ネットワーク
 //      エラー」すべてを再試行対象に。Step1もStep2(relation別way取得)もfetchOverpass経由なので
 //      両方に効く。RETRY_WAIT=10秒×MAX_RETRY=3。4xx（429以外）はクエリ自体の問題なので即終了。
@@ -226,6 +253,8 @@ const RETRY_WAIT = 10000;
 const MAX_RETRY = 3;
 const FETCH_TIMEOUT = 10000;   // [timeout:N]指定が無いクエリの既定(ms)。クライアントは N秒+5秒 で打ち切り
 const NEAR_STATION = 800;      // 端点が駅とみなせる距離(m)
+const FAST_SNAP = 200;         // キャッシュ専用高速パスの採用条件（両端ギャップ上限・m）。誤経路の再生防止のため厳格。
+const LARGE_REL_WAYS = 400;    // これを超えるway数のrelationは「採用経路で使ったway」だけ間引き保存(p:1)
 const ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",         // 主（内部でz/lz4へラウンドロビン）
   "https://overpass.kumi.systems/api/interpreter",   // フェイルオーバー（Private.coffee運営）
@@ -253,6 +282,7 @@ let USE_STRATEGY_B = true;   // 戦略B（JSON読込画面で設定）
 const SESSION_REL_GEOM = new Map(); // relId→ways: このページセッション中のメモリ共有（再試行・区間間で再取得しない）
 const SESSION_FETCHED = new Set();  // このセッションでAPIから取得したrelId（採用時にlocalStorageへ書く対象）
 const LOG = {}; // key -> ログオブジェクト
+const DAY_VISIBLE = {}; // di -> bool（日別表示。未定義はtrue扱い）
 
 // =====================================================================
 // ファイル読み込み
@@ -332,17 +362,32 @@ function reload() { location.reload(); }
 //  prefixOrder の先頭ファミリーから、サイズ降順で1件ずつ削除→再試行。
 //  ※"osmrel_"/"osmseg_" は "osm_" にprefix一致しない（4文字目が_でない）ので誤爆しない。
 let EVICTED = 0; // 今回セッションの退避件数（統計表示用）
+// 「いずれかの区間で採用中(osmseg_に記載)のrelation」キー集合。退避時の保護対象（遅延構築・segRelsSetで追記）。
+let PROTECTED_RELS = null;
+function protectedRelKeys(){
+  if(PROTECTED_RELS) return PROTECTED_RELS;
+  PROTECTED_RELS = new Set();
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(!k.startsWith('osmseg_')) continue;
+    try{ const {rels}=JSON.parse(localStorage.getItem(k)||'{}'); (rels||[]).forEach(id=>PROTECTED_RELS.add('osmrel_'+id)); }catch(e){}
+  }
+  return PROTECTED_RELS;
+}
 function evictForSpace(prefixOrder, excludeKey){
+  const prot = protectedRelKeys();
   const cands=[];
   for(let i=0;i<localStorage.length;i++){
     const k=localStorage.key(i);
     if(k===excludeKey) continue;
     const pri=prefixOrder.findIndex(p=>k.startsWith(p));
     if(pri<0) continue;
-    cands.push({k, pri, size:(localStorage.getItem(k)||'').length});
+    cands.push({k, pri, prot: prot.has(k)?1:0, size:(localStorage.getItem(k)||'').length});
   }
   if(!cands.length) return false;
-  cands.sort((a,b)=> a.pri-b.pri || b.size-a.size); // 優先ファミリー→サイズ大きい順
+  // 非保護を優先して追い出す → ファミリー優先順 → サイズ大きい順。
+  // 保護分しか残っていない場合は保護分も対象（新規書込不能よりはマシ）。
+  cands.sort((a,b)=> a.prot-b.prot || a.pri-b.pri || b.size-a.size);
   localStorage.removeItem(cands[0].k);
   EVICTED++;
   return true;
@@ -380,27 +425,55 @@ function cacheSet(q,data){
 }
 // ---- relation単位ジオメトリのキャッシュ（採用relationのみ保存・slim形式で容量節約） ----
 function relCacheKey(relId){ return "osmrel_"+relId; }
-function relCacheGet(relId){
+// allowPartial=true: 間引き保存(p:1)エントリも返す（キャッシュ専用高速パス用）。
+// 既定false: 完全版のみ。通常Step2は全way（分岐含む）が必要なため、部分キャッシュはミス扱い→API取得。
+function relCacheGet(relId, allowPartial=false){
   try {
     const raw = localStorage.getItem(relCacheKey(relId));
     if(!raw) return null;
-    const {ts,ways} = JSON.parse(raw);
-    if(Date.now()-ts > CACHE_TTL){ localStorage.removeItem(relCacheKey(relId)); return null; }
-    return ways;
+    const obj = JSON.parse(raw);
+    if(Date.now()-obj.ts > CACHE_TTL){ localStorage.removeItem(relCacheKey(relId)); return null; }
+    if(obj.p && !allowPartial) return null;
+    return obj.ways;
   } catch(e){ return null; }
 }
-function relCacheSet(relId, ways){
+// usedWayIdSet: 採用経路で実際に使ったwayのidセット。
+// way数>LARGE_REL_WAYS のrelationは該当wayだけを間引き保存(p:1)し、既存の間引きエントリとway id単位でマージ蓄積
+// （同一relationを複数区間で使うケースで、各区間の採用分が積み上がる）。
+// 返り値: {ok, saved, total, partial}（ログ表示用）
+function relCacheSet(relId, ways, usedWayIdSet){
   try {
+    let target = ways, partial = false;
+    if(ways.length > LARGE_REL_WAYS && usedWayIdSet && usedWayIdSet.size){
+      const picked = ways.filter(w=>usedWayIdSet.has(w.id));
+      if(picked.length){
+        try{
+          const prevRaw = localStorage.getItem(relCacheKey(relId));
+          if(prevRaw){
+            const prev = JSON.parse(prevRaw);
+            if(prev.p && Array.isArray(prev.ways)){
+              const have = new Set(picked.map(w=>w.id));
+              for(const w of prev.ways){ if(!have.has(w.id)) picked.push(w); }
+            }
+          }
+        }catch(e){}
+        target = picked; partial = true;
+      }
+    }
     // タグ等を捨て、座標は5桁丸め（≒1.1m）で容量節約。nodeKeyはtoFixed(5)なのでトポロジー不変。
-    const slim = ways.map(w=>({id:w.id, geometry:w.geometry.map(g=>({lat:+g.lat.toFixed(5), lon:+g.lon.toFixed(5)}))}));
-    return lsSetSmart(relCacheKey(relId), JSON.stringify({ts:Date.now(), ways:slim}), ["osm_","osmrel_"]);
-  } catch(e){ return false; }
+    const slim = target.map(w=>({id:w.id, geometry:w.geometry.map(g=>({lat:+(+g.lat).toFixed(5), lon:+(+g.lon).toFixed(5)}))}));
+    const obj = {ts:Date.now(), ways:slim};
+    if(partial) obj.p = 1;
+    const ok = lsSetSmart(relCacheKey(relId), JSON.stringify(obj), ["osm_","osmrel_"]);
+    return {ok, saved:slim.length, total:ways.length, partial};
+  } catch(e){ return {ok:false, saved:0, total:(ways&&ways.length)||0, partial:false}; }
 }
 // ---- 区間ごとの「採用relation IDリスト」キャッシュ（高速パス用） ----
 function segRelsKey(seg){
   const lns = (seg.lineNames||(seg.lineName?[seg.lineName]:[])).join('|');
   const dep = seg.fallback?.[0]||[], arr = seg.fallback?.[seg.fallback.length-1]||[];
-  const sig = lns+'@'+dep.join(',')+'>'+arr.join(',');   // lineNames・発着座標が変われば自動失効
+  const via = (seg.via||[]).map(v=>Array.isArray(v)?v.join(','):String(v)).join('|');
+  const sig = lns+'@'+dep.join(',')+'>'+arr.join(',')+(via?('#'+via):'');   // lineNames・発着座標・viaが変われば自動失効
   return "osmseg_"+btoa(unescape(encodeURIComponent(sig)));
 }
 function segRelsGet(seg){
@@ -413,7 +486,10 @@ function segRelsGet(seg){
   } catch(e){ return null; }
 }
 function segRelsSet(seg, rels){
-  try { lsSetSmart(segRelsKey(seg), JSON.stringify({ts:Date.now(), rels}), ["osm_","osmrel_"]); } catch(e){}
+  try {
+    lsSetSmart(segRelsKey(seg), JSON.stringify({ts:Date.now(), rels}), ["osm_","osmrel_"]);
+    if(PROTECTED_RELS) rels.forEach(id=>PROTECTED_RELS.add('osmrel_'+id)); // 退避保護リストへ追記
+  } catch(e){}
 }
 function clearCache(){
   const ks = Object.keys(localStorage).filter(k=>/^osm(_|rel_|seg_)/.test(k));
@@ -633,12 +709,13 @@ function dijkstraRoute(graph, startKey, endKey){
   // 経路復元（start→end）。各辺のcoordsはfrom→toに整列済み。
   const edges=[]; let cur=endKey;
   while(cur!==startKey){ const p=prev.get(cur); if(!p) return {found:false, reached:done, dist, prev}; edges.unshift(p.edge); cur=p.from; }
-  const coords=[]; const relIds=new Set();
+  const coords=[]; const relIds=new Set(); const wayIds=new Set();
   for(const e of edges){
     if(coords.length===0) coords.push(...e.coords); else coords.push(...e.coords.slice(1));
     if(e.relId!=null) relIds.add(e.relId);
+    const w=graph.ways[e.wayIdx]; if(w&&w.wayId!=null) wayIds.add(w.wayId);
   }
-  return {found:true, coords, routeLen:dist.get(endKey), relIds, hops:edges.length, reached:done, dist, prev};
+  return {found:true, coords, routeLen:dist.get(endKey), relIds, wayIds, hops:edges.length, reached:done, dist, prev};
 }
 
 // ノードキー→代表座標（分断箇所診断用）
@@ -683,26 +760,40 @@ out geom;`;
 //  Step2: relation IDごとに geometry を個別取得。【relation単位キャッシュ osmrel_、採用分のみ保存・slim形式】
 //  高速パス: 区間の前回採用relation(osmseg_)があれば、そのrelationだけ取得して再探索（再実行を高速化）。
 //  マージはグラフ構築時のみ（Dijkstraは全wayの結合グラフで最短経路を解くため事業者跨ぎ直通もそのまま）。
+// 経由駅(seg.via)の正規化: [["駅名", lat, lon, "路線名候補1", ...], ...] → [{name, pt, lines}]
+function parseVia(seg){
+  return (seg.via||[])
+    .filter(v=>Array.isArray(v) && v.length>=3 && isFinite(+v[1]) && isFinite(+v[2]))
+    .map(v=>({name:String(v[0]), pt:[+v[1], +v[2]], lines:v.slice(3).map(String).filter(Boolean)}));
+}
+
 async function strategyByLineName(seg, bbox, log, forceFull=false){
-  const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
+  const baseNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
+  const viaList = parseVia(seg);
+  const lineNames = [...new Set([...baseNames, ...viaList.flatMap(v=>v.lines)])];
   if(lineNames.length===0) return null;
   const dep = seg.fallback?.[0];
   const arr = seg.fallback?.[seg.fallback.length-1];
   if(!dep || !arr) return null;
   const delta = 0.01; // ±0.01°≈1.1km
   const fmt = v => v.toFixed(5);
-  const depBox = `${fmt(dep[0]-delta)},${fmt(dep[1]-delta)},${fmt(dep[0]+delta)},${fmt(dep[1]+delta)}`;
-  const arrBox = `${fmt(arr[0]-delta)},${fmt(arr[1]-delta)},${fmt(arr[0]+delta)},${fmt(arr[1]+delta)}`;
+  const boxOf = pt => `${fmt(pt[0]-delta)},${fmt(pt[1]-delta)},${fmt(pt[0]+delta)},${fmt(pt[1]+delta)}`;
+  const depBox = boxOf(dep);
+  const arrBox = boxOf(arr);
   const isSamePoint = dep[0]===arr[0] && dep[1]===arr[1];
   const nameRegex = lineNames.map(escapeRegex).join("|");
   const routeType = `"route"~"train|tram|light_rail|monorail|subway|railway"`;
   const nameCond  = `"name"~"${nameRegex}"`;
+  if(viaList.length) log.push({t:'info', msg:`経由駅(via): ${viaList.map(v=>`${v.name}(${v.lines.join('・')||'路線名追加なし'})`).join(' / ')}`});
 
   // ---- Step1: relationの ID＋タグのみ（軽量・クエリ文字列キャッシュ） ----
+  //  bbox = 乗車駅±0.01° ∪ 降車駅±0.01° ∪ 各経由駅±0.01°（経由駅でしか路線に掛からないケースに対応）
+  const viaBoxLines = viaList.map(v=>`
+  relation[${routeType}][${nameCond}](${boxOf(v.pt)});`).join('');
   const q1=`[out:json][timeout:10];
 (
   relation[${routeType}][${nameCond}](${depBox});${isSamePoint ? '' : `
-  relation[${routeType}][${nameCond}](${arrBox});`}
+  relation[${routeType}][${nameCond}](${arrBox});`}${viaBoxLines}
 );
 out tags;`;
   const t1=performance.now();
@@ -839,11 +930,11 @@ async function fetchRailCoords(seg, log){
     log.push({t:'info', msg:`　${label}: 乗車駅スナップ ${s.dist.toFixed(0)}m / 降車駅スナップ ${e.dist.toFixed(0)}m / ノード数 ${graph.adj.size} / way数 ${graph.ways.length}`});
     const r = dijkstraRoute(graph, s.key, e.key);
     if(!r.found){
-      // 経路なし＝非連結。到達範囲内の降車駅最近接ノードをNEAR_STATION以内なら代替終点として採用。
+      // 経路なし＝非連結。到達範囲内の降車駅最近接ノードまでの経路を復元する。
+      //  ・NEAR_STATION以内 → 従来通り「代替経路」として通常採用
+      //  ・NEAR_STATION超   → 「部分経路」(partial)として返し、呼び出し側で端点→駅を赤点線コネクタ描画（分断デバッグ用）
       const near = nearestReachable(r.reached, nodeCoordMap(graph.ways), toCoord);
-      if(near && near.gap <= NEAR_STATION){
-        log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 最近接到達ノード(${near.gap.toFixed(0)}m手前)で代替経路を復元`});
-        // prevマップを使って起点→nearKeyの経路を復元
+      if(near && near.key !== s.key){
         const edges = []; let cur = near.key;
         while(cur !== s.key){
           const p = r.prev.get(cur);
@@ -851,30 +942,75 @@ async function fetchRailCoords(seg, log){
           edges.unshift(p.edge); cur = p.from;
         }
         if(edges.length > 0){
-          const coords = []; const relIds = new Set();
+          const coords = []; const relIds = new Set(); const wayIds = new Set();
           for(const edge of edges){
             if(coords.length === 0) coords.push(...edge.coords);
             else coords.push(...edge.coords.slice(1));
             if(edge.relId != null) relIds.add(edge.relId);
+            const w = graph.ways[edge.wayIdx]; if(w && w.wayId!=null) wayIds.add(w.wayId);
           }
           const routeLen = r.dist.get(near.key) || 0;
-          log.push({t:'ok', msg:`　${label}: 代替経路 経路長 ${(routeLen/1000).toFixed(1)}km / 区間${edges.length} / relation[${[...relIds].join(',')||'-'}]`});
-          return {coords, startGap:s.dist, endGap:near.gap, routeLen, relIds:[...relIds], isNearFallback:true};
+          const isPartial = near.gap > NEAR_STATION;
+          if(isPartial){
+            log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 到達可能な最近接ノード（降車駅まで残り${(near.gap/1000).toFixed(1)}km）まで部分経路を復元`});
+            log.push({t:'info', msg:`　　分断推定位置 [${near.coord[0].toFixed(4)},${near.coord[1].toFixed(4)}] 付近`});
+          } else {
+            log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 最近接到達ノード(${near.gap.toFixed(0)}m手前)で代替経路を復元`});
+          }
+          log.push({t:isPartial?'warn':'ok', msg:`　${label}: ${isPartial?'部分':'代替'}経路 経路長 ${(routeLen/1000).toFixed(1)}km / 区間${edges.length} / relation[${[...relIds].join(',')||'-'}]`});
+          return {coords, startGap:s.dist, endGap:near.gap, routeLen, relIds:[...relIds], wayIdSet:wayIds, isNearFallback:!isPartial, partial:isPartial};
         }
       }
-      log.push({t:'warn', msg:`　${label}: 経路なし（起点と終点が非連結）`});
+      log.push({t:'warn', msg:`　${label}: 経路なし（起点と終点が非連結・部分経路も復元不可）`});
       if(near) log.push({t:'info', msg:`　　起点側到達範囲の降車駅最近接 [${near.coord[0].toFixed(4)},${near.coord[1].toFixed(4)}] が降車駅から ${near.gap.toFixed(0)}m（この付近で分断の可能性）`});
       return null;
     }
     log.push({t:'ok', msg:`　${label}: 経路発見 経路長 ${(r.routeLen/1000).toFixed(1)}km / 区間${r.hops} / relation[${[...r.relIds].join(',')||'-'}]`});
-    return {coords:r.coords, startGap:s.dist, endGap:e.dist, routeLen:r.routeLen, relIds:[...r.relIds]};
+    return {coords:r.coords, startGap:s.dist, endGap:e.dist, routeLen:r.routeLen, relIds:[...r.relIds], wayIdSet:r.wayIds, partial:false};
   };
 
-  // 戦略A（路線名一致way）。高速パス：前回採用relationがあればそれだけ取得。
-  let resA = await strategyByLineName(seg, bbox, log, false);
+  // ---- キャッシュ専用高速パス ----
+  // 前回採用relation(osmseg_)が全てキャッシュ（セッション/relcache・部分キャッシュ可）に揃っていれば、
+  // Step1(API)もスキップして即グラフ構築→Dijkstra。両端ギャップ≦FAST_SNAP(200m)なら採用。
+  // 200mはNEAR_STATION(800m)より大幅に厳格＝「前回と同じ正しい経路が再現できた」場合のみ通す。
+  // 不成立なら osmseg_ を破棄し、通常フロー（Step1→全relation取得）へ。
+  let fastTried = false;
+  {
+    const adopted = segRelsGet(seg);
+    if(adopted && adopted.length){
+      const cachedWays=[]; const seenW=new Set(); let missing=null;
+      for(const rid of adopted){
+        const ways = SESSION_REL_GEOM.get(rid) || relCacheGet(rid, true);
+        if(!ways){ missing=rid; break; }
+        for(const w of ways){
+          if(seenW.has(w.id)) continue;
+          seenW.add(w.id);
+          cachedWays.push({id:w.id, geometry:w.geometry, _relId:rid});
+        }
+      }
+      if(missing==null && cachedWays.length){
+        fastTried = true;
+        log.push({t:'info', msg:`高速パス: 前回採用relation ${adopted.length}件が全てキャッシュ済 → Step1/Step2をスキップして先行試行（way ${cachedWays.length}）`});
+        const rF = solve(cachedWays, '高速パス');
+        if(rF && !rF.partial && rF.startGap<=FAST_SNAP && rF.endGap<=FAST_SNAP){
+          log.push({t:'ok', msg:`高速パス採用（両端ギャップ ${rF.startGap.toFixed(0)}m/${rF.endGap.toFixed(0)}m ≦ ${FAST_SNAP}m）`});
+          segRelsSet(seg, adopted); // TTL更新
+          return finalize(rF);
+        }
+        log.push({t:'warn', msg:`高速パス不採用（${rF ? `ギャップ ${rF.startGap.toFixed(0)}m/${rF.endGap.toFixed(0)}m が ${FAST_SNAP}m超` : '経路なし'}）→ 通常フロー（全relation再取得）へ`});
+        try { localStorage.removeItem(segRelsKey(seg)); } catch(e){}
+      } else if(missing!=null){
+        log.push({t:'info', msg:`高速パス: relation ${missing} がキャッシュ未保持 → 通常フロー（Step2内の採用分限定取得は有効）`});
+      }
+    }
+  }
+
+  // 戦略A（路線名一致way）。キャッシュ専用高速パスを試行済みなら forceFull=true で全relation取得
+  // （同じキャッシュ部分集合での再失敗を防ぐ）。未試行ならStep2内高速パス（採用分のみAPI取得）有効。
+  let resA = await strategyByLineName(seg, bbox, log, fastTried);
   let result = (resA && resA.wayEls.length) ? solve(resA.wayEls, '戦略A') : null;
 
-  // 高速パスで降車駅に届かなければ、全relationで再取得して再探索
+  // Step2内高速パスで降車駅に届かなければ、全relationで再取得して再探索
   if(resA && resA.usedFastPath && (!result || result.endGap > NEAR_STATION)){
     log.push({t:'warn', msg:`　戦略A(高速パス)で降車駅に届かず（${result ? 'ギャップ '+result.endGap.toFixed(0)+'m' : '経路なし'}）→ 全relationで再取得`});
     try { localStorage.removeItem(segRelsKey(seg)); } catch(e){}
@@ -903,17 +1039,24 @@ async function fetchRailCoords(seg, log){
     }
   }
 
-  // 採用relationだけをキャッシュ保存（容量節約）。降車駅へ十分到達できた戦略A結果のみ対象。
-  // このセッションでAPI取得した分のみ書く（永続化に成功したらSESSION_FETCHEDから外す＝以後の区間で再書込しない）。
-  if(result && result.relIds && result.relIds.length && result.endGap <= NEAR_STATION){
-    let wrote=0;
+  // 採用relationだけをキャッシュ保存（容量節約）。両端とも駅へ十分到達できた結果のみ対象
+  // （部分経路・始点側大ズレを保存すると高速パスが誤経路を再生するため除外）。
+  // このセッションでAPI取得した分のみ書く（永続化成功でSESSION_FETCHEDから外す＝以後の区間で再書込しない）。
+  // 大型relation（way数>LARGE_REL_WAYS）は採用経路のwayだけ間引き保存。
+  if(result && result.relIds && result.relIds.length && !result.partial
+     && result.startGap <= NEAR_STATION && result.endGap <= NEAR_STATION){
+    let wrote=0; const thinned=[];
     for(const rid of result.relIds){
       if(SESSION_FETCHED.has(rid) && SESSION_REL_GEOM.has(rid)){
-        if(relCacheSet(rid, SESSION_REL_GEOM.get(rid))){ wrote++; SESSION_FETCHED.delete(rid); }
+        const rr = relCacheSet(rid, SESSION_REL_GEOM.get(rid), result.wayIdSet);
+        if(rr.ok){
+          wrote++; SESSION_FETCHED.delete(rid);
+          if(rr.partial) thinned.push(`${rid}: ${rr.total}→${rr.saved}way`);
+        }
       }
     }
     segRelsSet(seg, result.relIds);
-    log.push({t:'info', msg:`　採用relationをキャッシュ保存（新規${wrote}件 / 採用計${result.relIds.length}件）`});
+    log.push({t:'info', msg:`　採用relationをキャッシュ保存（新規${wrote}件 / 採用計${result.relIds.length}件${thinned.length?` / 間引き ${thinned.join(', ')}`:''}）`});
   }
 
   if(!result || result.coords.length<2){
@@ -921,15 +1064,23 @@ async function fetchRailCoords(seg, log){
     return null;
   }
 
-  const b=result;
-  const uniq=[...new Set(b.relIds)];
-  log.push({t:'ok', msg:`採用: 降車駅ギャップ ${b.endGap.toFixed(0)}m`});
-  log.push({t:'info', msg:`　始点ギャップ ${b.startGap.toFixed(0)}m / 終点ギャップ ${b.endGap.toFixed(0)}m`});
-  log.push({t:'info', msg:`　経路長 ${(b.routeLen/1000).toFixed(1)}km（直線距離 ${(directLen/1000).toFixed(1)}km）`});
-  log.push({t:'info', msg:`　採用relation [${uniq.join(',')||'-'}]（${uniq.length}本）`});
-  const ep1=b.coords[0], ep2=b.coords[b.coords.length-1];
-  log.push({t:'info', msg:`描画端点1 [${ep1[0].toFixed(4)},${ep1[1].toFixed(4)}] / 端点2 [${ep2[0].toFixed(4)},${ep2[1].toFixed(4)}]`});
-  return b.coords;
+  return finalize(result);
+
+  // ---- 採用結果の共通仕上げ: ログ出力＋未達側の赤点線コネクタ計算 ----
+  function finalize(b){
+    const uniq=[...new Set(b.relIds)];
+    const connectors=[];
+    if(b.startGap > NEAR_STATION) connectors.push([[fromCoord[0],fromCoord[1]],[b.coords[0][0],b.coords[0][1]]]);
+    if(b.endGap > NEAR_STATION) connectors.push([[b.coords[b.coords.length-1][0],b.coords[b.coords.length-1][1]],[toCoord[0],toCoord[1]]]);
+    const isPartial = connectors.length>0;
+    log.push({t:isPartial?'warn':'ok', msg:`採用: 降車駅ギャップ ${b.endGap.toFixed(0)}m${isPartial?'（未達側を赤点線コネクタで駅まで接続・デバッグ表示）':''}`});
+    log.push({t:'info', msg:`　始点ギャップ ${b.startGap.toFixed(0)}m / 終点ギャップ ${b.endGap.toFixed(0)}m`});
+    log.push({t:'info', msg:`　経路長 ${(b.routeLen/1000).toFixed(1)}km（直線距離 ${(directLen/1000).toFixed(1)}km）`});
+    log.push({t:'info', msg:`　採用relation [${uniq.join(',')||'-'}]（${uniq.length}本）`});
+    const ep1=b.coords[0], ep2=b.coords[b.coords.length-1];
+    log.push({t:'info', msg:`描画端点1 [${ep1[0].toFixed(4)},${ep1[1].toFixed(4)}] / 端点2 [${ep2[0].toFixed(4)},${ep2[1].toFixed(4)}]`});
+    return {coords:b.coords, connectors, partial:isPartial};
+  }
 }
 
 
@@ -957,20 +1108,61 @@ function makePl(coords, seg){
   pl.on('click',()=>selectSeg(seg.di,seg.si));
   return pl;
 }
+function dayVisible(di){ return DAY_VISIBLE[di]!==false; }
+function setLayerVisible(layer,on){
+  if(!layer) return;
+  if(on){ if(!map.hasLayer(layer)) layer.addTo(map); }
+  else { if(map.hasLayer(layer)) map.removeLayer(layer); }
+}
+// 日別表示切替（ロード進行中でもplMapに入っている分は即反映、以後の追加分はputで考慮）
+function toggleDay(di,on){
+  DAY_VISIBLE[di]=on;
+  for(const seg of SEGS){
+    if(seg.di!==di) continue;
+    const ent=plMap[`${seg.di}-${seg.si}`]; if(!ent) continue;
+    setLayerVisible(ent.osm,on); setLayerVisible(ent.fallback,on);
+    (ent.conn||[]).forEach(c=>setLayerVisible(c,on));
+  }
+  const all=document.getElementById('chk-all-days');
+  if(all){
+    const dis=[...new Set(SEGS.map(s=>s.di))];
+    all.checked = dis.every(d=>DAY_VISIBLE[d]!==false);
+  }
+}
+function toggleAllDays(on){
+  const dis=[...new Set(SEGS.map(s=>s.di))];
+  for(const d of dis){
+    DAY_VISIBLE[d]=on;
+    const chk=document.getElementById(`chk-day-${d}`); if(chk) chk.checked=on;
+  }
+  for(const seg of SEGS){
+    const ent=plMap[`${seg.di}-${seg.si}`]; if(!ent) continue;
+    setLayerVisible(ent.osm,on); setLayerVisible(ent.fallback,on);
+    (ent.conn||[]).forEach(c=>setLayerVisible(c,on));
+  }
+}
+// 未達側コネクタ（経路端点→駅の赤点線。採用way・分断箇所の目視デバッグ用）
+function makeConnector(c){
+  return L.polyline(c,{color:'#d00000',weight:2,dashArray:'2,6',opacity:0.9});
+}
 function putFallback(seg){
   if(!seg.fallback?.length) return;
   const key=`${seg.di}-${seg.si}`;
   if(plMap[key]?.osm||plMap[key]?.fallback) return;
-  const pl=makePl(seg.fallback,seg); pl.addTo(map);
+  const pl=makePl(seg.fallback,seg);
+  if(dayVisible(seg.di)) pl.addTo(map);
   plMap[key]={fallback:pl};
 }
-function putOsm(seg,coords){
+function putOsm(seg,coords,connectors){
   const key=`${seg.di}-${seg.si}`;
   const e=plMap[key]||{};
   if(e.fallback){map.removeLayer(e.fallback);delete e.fallback;}
   if(e.osm)map.removeLayer(e.osm);
-  const pl=makePl(coords,seg); pl.addTo(map);
-  plMap[key]={osm:pl};
+  if(e.conn)e.conn.forEach(c=>map.removeLayer(c));
+  const pl=makePl(coords,seg);
+  const conn=(connectors||[]).map(makeConnector);
+  if(dayVisible(seg.di)){ pl.addTo(map); conn.forEach(c=>c.addTo(map)); }
+  plMap[key]={osm:pl, conn};
 }
 function getActivePl(di,si){ const e=plMap[`${di}-${si}`]; return e?.osm||e?.fallback||null; }
 
@@ -982,7 +1174,10 @@ function selectSeg(di,si){
   resetActive();
   const pl=getActivePl(di,si); if(!pl)return;
   pl._active=true; pl.setStyle({weight:pl._baseW+3,opacity:1}); activePl=pl;
-  map.fitBounds(pl.getBounds(),{padding:[50,50]});
+  const ent=plMap[`${di}-${si}`];
+  const items=[pl, ...((ent&&ent.conn)||[])];
+  try{ map.fitBounds(L.featureGroup(items).getBounds(),{padding:[50,50]}); }
+  catch(e){ map.fitBounds(pl.getBounds(),{padding:[50,50]}); }
   const row=document.getElementById(`r-${di}-${si}`);
   if(row){row.classList.add('active');row.scrollIntoView({block:'nearest'});activeRow=row;}
   const seg=SEGS.find(s=>s.di===di&&s.si===si);
@@ -1013,7 +1208,14 @@ function buildPanel(){
     if(seg.di!==prevDi){
       const blk=document.createElement('div'); blk.className='day-block'; blk.id=`day-${seg.di}`;
       const dl=document.createElement('div'); dl.className='day-label';
-      dl.textContent=DAY_LABELS[seg.di]||`Day ${seg.di+1}`;
+      const chk=document.createElement('input'); chk.type='checkbox'; chk.id=`chk-day-${seg.di}`;
+      chk.checked = DAY_VISIBLE[seg.di]!==false;
+      chk.addEventListener('change',()=>toggleDay(seg.di,chk.checked));
+      const tx=document.createElement('span'); tx.className='dl-text';
+      tx.textContent=DAY_LABELS[seg.di]||`Day ${seg.di+1}`;
+      const di0=seg.di;
+      tx.onclick=()=>{ chk.checked=!chk.checked; toggleDay(di0,chk.checked); };
+      dl.appendChild(chk); dl.appendChild(tx);
       blk.appendChild(dl); body.appendChild(blk); prevDi=seg.di;
     }
     const t=T[seg.type];
@@ -1041,6 +1243,11 @@ function buildLegend(){
     const ln=document.createElement('div'); ln.className='leg-line'; ln.style.background=t.color;
     el.appendChild(ln); el.appendChild(document.createTextNode(t.label)); lg.appendChild(el);
   }
+  // 未達コネクタ（経路端点→駅の赤点線）
+  const el=document.createElement('div'); el.className='leg-item';
+  const ln=document.createElement('div'); ln.className='leg-line';
+  ln.style.cssText='background:repeating-linear-gradient(90deg,#d00000 0 3px,transparent 3px 7px);';
+  el.appendChild(ln); el.appendChild(document.createTextNode('未達コネクタ')); lg.appendChild(el);
 }
 
 // =====================================================================
@@ -1059,14 +1266,16 @@ function downloadLog(){
   const nFb=keys.filter(k=>LOG[k].result==='fallback').length;
   const nErr=keys.filter(k=>LOG[k].result==='error').length;
   const nSkip=keys.filter(k=>LOG[k].result==='skip').length;
+  const nF=keys.filter(k=>LOG[k].strategy==='F').length;
   const nA=keys.filter(k=>LOG[k].strategy==='A').length;
   const nB=keys.filter(k=>LOG[k].strategy==='B').length;
+  const nPart=keys.filter(k=>LOG[k].result==='osm'&&LOG[k].partial).length;
   const nAtoB=keys.filter(k=>LOG[k].aToB).length;
-  const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk}（戦略A採用 ${nA} / 戦略B採用 ${nB}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}`, cacheStats()];
+  const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk}（高速パス ${nF} / 戦略A ${nA} / 戦略B ${nB} / うち部分描画🔶 ${nPart}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}`, cacheStats()];
   for(const seg of SEGS){
     const lg=LOG[`${seg.di}-${seg.si}`];
     if(!lg) continue;
-    const icon = lg.result==='osm'?'🗺' : lg.result==='error'?'❌' : lg.result==='skip'?'➖':'⚠';
+    const icon = lg.result==='osm'?(lg.partial?'🔶':'🗺') : lg.result==='error'?'❌' : lg.result==='skip'?'➖':'⚠';
     lines.push(icon, seg.name, lg.totalTime!=null?`${lg.totalTime.toFixed(1)}秒`:'');
     for(const s of lg.steps) lines.push(s.msg);
   }
@@ -1089,29 +1298,34 @@ function renderLog(focusKey){
   const nFb=keys.filter(k=>LOG[k].result==='fallback').length;
   const nErr=keys.filter(k=>LOG[k].result==='error').length;
   const nSkip=keys.filter(k=>LOG[k].result==='skip').length;
+  const nF=keys.filter(k=>LOG[k].strategy==='F').length;
   const nA=keys.filter(k=>LOG[k].strategy==='A').length;
   const nB=keys.filter(k=>LOG[k].strategy==='B').length;
+  const nPart=keys.filter(k=>LOG[k].result==='osm'&&LOG[k].partial).length;
   const nAtoB=keys.filter(k=>LOG[k].aToB).length;
   document.getElementById('log-summary').textContent =
-    `合計${keys.length}区間 / API成功(OSM描画)${nOk}（戦略A採用 ${nA} / 戦略B採用 ${nB}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}` + ' ｜ ' + cacheStats();
+    `合計${keys.length}区間 / API成功(OSM描画)${nOk}（高速パス ${nF} / 戦略A ${nA} / 戦略B ${nB} / うち部分描画🔶 ${nPart}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}` + ' ｜ ' + cacheStats();
 
   for(const seg of SEGS){
     const key=`${seg.di}-${seg.si}`;
     const lg=LOG[key];
     if(!lg) continue;
     if(filter==='ok' && lg.result!=='osm') continue;
+    if(filter==='fast' && lg.strategy!=='F') continue;
     if(filter==='strategyA' && lg.strategy!=='A') continue;
     if(filter==='strategyB' && lg.strategy!=='B') continue;
+    if(filter==='partial' && !(lg.result==='osm'&&lg.partial)) continue;
     if(filter==='fallback' && lg.result!=='fallback') continue;
     if(filter==='error' && lg.result!=='error') continue;
 
     const segDiv=document.createElement('div'); segDiv.className='log-seg';
     const head=document.createElement('div');
-    const statusClass = lg.result==='osm'?'ok' : lg.result==='error'?'error' : 'fallback';
+    const statusClass = lg.result==='osm'?(lg.partial?'fallback':'ok') : lg.result==='error'?'error' : 'fallback';
     head.className='log-seg-head '+statusClass;
-    const icon = lg.result==='osm'?'🗺' : lg.result==='error'?'❌' : lg.result==='skip'?'➖':'⚠';
+    const icon = lg.result==='osm'?(lg.partial?'🔶':'🗺') : lg.result==='error'?'❌' : lg.result==='skip'?'➖':'⚠';
     const total = lg.totalTime!=null ? `${lg.totalTime.toFixed(1)}秒` : '';
-    const stratBadge = lg.strategy ? ` <b>[戦略${lg.strategy}]</b>` : '';
+    const stratName = lg.strategy==='F'?'高速パス':lg.strategy?`戦略${lg.strategy}`:'';
+    const stratBadge = stratName ? ` <b>[${stratName}]</b>` : '';
     head.innerHTML=`<span class="log-seg-status">${icon}</span><span class="log-seg-name">${seg.name}${stratBadge}</span><span class="log-seg-time">${total}</span>`;
     const detail=document.createElement('div'); detail.className='log-detail';
     if(focusKey===key) detail.classList.add('open');
@@ -1159,13 +1373,19 @@ async function loadOneSeg(seg){
     log.push({t:'info', msg:'種別: fallbackSkip（新幹線/長距離/短距離特殊区間）'});
   } else if(seg.lineNames||seg.lineName){
     const icon=document.getElementById(`icon-${seg.di}-${seg.si}`);
-    let coords=null;
-    try { coords=await fetchRailCoords(seg, log); } catch(e){ log.push({t:'err',msg:'例外: '+e.message}); }
-    if(coords&&coords.length>=2){
-      putOsm(seg,coords);
+    let res=null;
+    try { res=await fetchRailCoords(seg, log); } catch(e){ log.push({t:'err',msg:'例外: '+e.message}); }
+    if(res&&res.coords&&res.coords.length>=2){
+      putOsm(seg,res.coords,res.connectors);
       result='osm';
-      log.push({t:'ok', msg:'→ APIの出力を採用して描画'});
-      if(icon)icon.textContent='🗺';
+      LOG[key].partial = !!res.partial;
+      if(res.partial){
+        log.push({t:'warn', msg:'→ 部分経路＋赤点線コネクタで描画（経路未達・分断デバッグ用）'});
+        if(icon)icon.textContent='🔶';
+      } else {
+        log.push({t:'ok', msg:'→ APIの出力を採用して描画'});
+        if(icon)icon.textContent='🗺';
+      }
     } else {
       result='fallback';
       log.push({t:'warn', msg:'→ fallback（直線/概略）を採用して描画'});
@@ -1185,9 +1405,10 @@ async function loadOneSeg(seg){
 
   LOG[key].totalTime=(performance.now()-t0)/1000;
 
-  // 採用戦略の判定（ログから）: 戦略Bを採用したか否か。OSM描画時のみA/Bを持つ。
+  // 採用戦略の判定（ログから）: 高速パス/戦略A/戦略B。OSM描画時のみ持つ。
   if(LOG[key].result==='osm'){
-    LOG[key].strategy = log.some(s=>s.msg && s.msg.includes('戦略Bの結果を採用')) ? 'B' : 'A';
+    LOG[key].strategy = log.some(s=>s.msg && s.msg.includes('戦略Bの結果を採用')) ? 'B'
+                      : log.some(s=>s.msg && s.msg.includes('高速パス採用')) ? 'F' : 'A';
   } else {
     LOG[key].strategy = null;
   }
