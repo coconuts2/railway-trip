@@ -16,7 +16,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #progress-fill{height:100%;background:#534AB7;width:0%;transition:width 0.3s;}
 .hbtn{background:#f0f0f0;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:10px;color:#555;white-space:nowrap;}
 .hbtn:hover{background:#e3e3e3;}
-#main{display:flex;flex:1;min-height:0;}
+#main{display:flex;flex:1;min-height:0;position:relative;}
 #map{flex:1;min-width:0;background:#eef0f2;}
 #panel{width:280px;min-width:280px;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;font-size:12px;position:relative;}
 #ph{padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:2;}
@@ -54,7 +54,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .seg-note{color:#888;font-size:10px;margin-top:1px;line-height:1.4;}
 .warn{color:#c84800;}
 .seg-icon{position:absolute;right:6px;top:6px;font-size:10px;line-height:1;cursor:help;}
-#det{display:none;position:absolute;top:0;right:0;width:280px;height:100%;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;z-index:20;box-shadow:-3px 0 10px rgba(0,0,0,0.08);}
+#det{display:none;position:absolute;right:0;bottom:0;width:280px;height:50%;background:#fff;border-top:2px solid #d0d0d0;border-left:1px solid #e0e0e0;overflow-y:auto;z-index:20;box-shadow:0 -4px 16px rgba(0,0,0,0.13);border-radius:12px 0 0 0;}
 #det-head{display:flex;align-items:flex-start;gap:6px;padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:3;}
 #det-title{font-size:11px;font-weight:600;color:#222;flex:1;line-height:1.4;}
 #det-close{background:#f0f0f0;border:none;border-radius:5px;padding:2px 7px;cursor:pointer;font-size:11px;color:#555;flex-shrink:0;}
@@ -110,9 +110,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #loader-err{color:#c03030;font-size:12px;margin-top:10px;min-height:16px;}
 @media (max-width:768px){
   #main{flex-direction:column;}
-  #panel{width:100%;min-width:0;border-left:none;border-top:1px solid #e0e0e0;height:40vh;}
-  #map{height:60vh;flex:none;}
-  #det{width:100%;height:50vh;top:auto;bottom:0;}
+  #panel{width:100%;min-width:0;border-left:none;border-top:1px solid #e0e0e0;height:42vh;}
+  #map{height:58vh;flex:none;}
+  /* 詳細は画面下部に約45vh（パネル上に重なるレイヤ）。背景の一覧は上部に残る。 */
+  #det{width:100%;height:45vh;right:0;bottom:0;border-left:none;border-radius:14px 14px 0 0;}
+  /* タップしやすいよう余白とフォントを少し拡大 */
+  .seg-row{padding-top:8px;padding-bottom:8px;}
+  .dj-item{padding:6px 8px;}
+  #det-close{padding:5px 12px;font-size:13px;}
+  .leg-item{font-size:12px;}
+}
+/* タッチ端末でホバー前提のUIが固まらないように */
+@media (hover:none){
+  .seg-row:active{background:#eef3ff;}
+  .dj-item:active{background:#ffe9e3;}
 }
 </style>
 </head>
@@ -199,7 +210,25 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0613-3
+// rail_trip_map 0613-5
+//  ★0613-5: （0613-3ベース。0613-4のマルチソース改修はrelIds型不整合バグで全滅したため不採用）
+//    ①ログ秒数の正確化＋合計表示: 各区間の計測を1本化（タイミングの重複/漏れ解消）。
+//      サマリーとログ画面に「合計処理時間」を表示。
+//    ②未達リストの逐次表示: 各区間ロード後にも未発見/部分リスト(buildDotJump)を更新。
+//      最後まで待たずに、途中経過で未達区間が見える。
+//    ③経由駅(via)優先の経路探索: viaがある区間は「出発→経由1→…→経由N→到着」の順で
+//      各レグの最短経路を連結する（経路全体として経由駅を必ず通る）。
+//      例: 〇〇のはなし＝新下関→(下関)→(幡生)→東萩。viaの座標にスナップして区切る。
+//    ④route=bus対応（戦略D・電車と独立）: type=="bus" か名称/路線名にバス系の語を含む区間は
+//      way[route=bus][name~lineNames] を直接取得して最短経路（rail系フィルタとは別関数）。
+//    ⑤スマホ対応の微調整（既存viewport+media queryに加え、タッチ操作・詳細レイヤの高さ最適化）。
+//    ⑥詳細パネルを下半分オーバーレイ化: 路線クリック時、右ブロックを覆わず、その上に
+//      高さ約50%のレイヤーとして詳細を表示（背景の一覧は見えたまま）。
+//  （旧: 0613-3）
+//  ★0613-3: wayQuery自動判定(type/名称) / ロープウェイ(aerialway)対応 / 点線リスト開閉
+//  ★0613-2: フェリー・ケーブル対応(戦略C) / 点線ジャンプ / 未達・直線のみ表示
+//  ★0613-1: 日別表示 / via / 高速パス / 部分描画 / 大型rel間引き / 採用rel保護
+//  ★0611-1
 //  ★0613-3: ①wayQueryの自動判定: seg.wayQuery未指定でも、type=="ferry"なら"ferry"、
 //      type=="cable"または路線名/区間名に「ケーブル/鋼索/ロープ/索道/funicular」を含めば
 //      "funicular"とみなす（resolveWayQuery）。JSONにwayQueryを書かなくてもフェリー/索道が
@@ -450,6 +479,20 @@ function lsSetSmart(key, val, prefixOrder){
   }
   return false;
 }
+// 合計処理時間: 各区間のtotalTime合計と、ロード全体の実時間（壁時計）の両方を出す。
+//  各区間のtotalTimeはシリアル実行の区間内実時間で重複・漏れなし。合計＝総処理時間。
+let WALL_START=null, WALL_END=null;
+function totalTimeStr(){
+  const keys=Object.keys(LOG);
+  const sum=keys.reduce((a,k)=>a+(LOG[k].totalTime||0),0);
+  let s=`合計処理時間 ${sum.toFixed(1)}秒（${keys.length}区間）`;
+  if(WALL_START!=null){
+    const wall=((WALL_END!=null?WALL_END:performance.now())-WALL_START)/1000;
+    s+=` / 実時間 ${wall.toFixed(1)}秒`;
+  }
+  return s;
+}
+
 function cacheStats(){
   let q={n:0,c:0}, r={n:0,c:0}, g={n:0,c:0};
   for(let i=0;i<localStorage.length;i++){
@@ -1027,6 +1070,81 @@ out geom;`;
   return {wayEls, relNames:['(way直接検索)']};
 }
 
+// バス区間判定（type=="bus" または 名称/路線名にバス系の語）。電車系とは独立。
+function isBusSeg(seg){
+  if(seg.busQuery==='none') return false;
+  if(seg.type==='bus' || seg.busQuery) return true;
+  const txt = `${seg.name||''} ${(seg.lineNames||[]).join(' ')} ${seg.lineName||''}`;
+  return /バス|ばす|\bbus\b|系統/i.test(txt);
+}
+
+// 戦略D: 路線バス（route=bus）専用。電車系の戦略A/B/Cとは完全に独立した取得関数。
+//  bus routeは relation で表現されることが多いので、Step1で route=bus relationをbboxから探し、
+//  Step2で各relationのway geometryを取得してグラフ化（電車のrelation 2段階と同様だが route=bus固定）。
+//  優先度は低めだが、京阪バス等の山内連絡に対応。
+async function strategyByBus(seg, bbox, log){
+  const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
+  const dep = seg.fallback?.[0], arr = seg.fallback?.[seg.fallback.length-1];
+  if(!dep || !arr){ log.push({t:'err', msg:'戦略D(bus): 始終点座標なし'}); return null; }
+  const delta = 0.02; // バスは停留所間隔が広めなので±0.02°
+  const fmt = v => v.toFixed(5);
+  const boxOf = pt => `${fmt(pt[0]-delta)},${fmt(pt[1]-delta)},${fmt(pt[0]+delta)},${fmt(pt[1]+delta)}`;
+  const isSame = dep[0]===arr[0] && dep[1]===arr[1];
+  const boxes = isSame ? [dep] : [dep, arr];
+  const nameRegex = lineNames.length ? lineNames.map(escapeRegex).join('|') : null;
+  const nameCond = nameRegex ? `["name"~"${nameRegex}"]` : '';
+
+  // Step1: route=bus relationのID＋タグ
+  const relParts = boxes.map(b=>`  relation["route"="bus"]${nameCond}(${boxOf(b)});`).join('\n');
+  const q1=`[out:json][timeout:15];
+(
+${relParts}
+);
+out tags;`;
+  const t1=performance.now();
+  const r1=await fetchOverpass(q1, log);
+  const dt1=((performance.now()-t1)/1000).toFixed(1);
+  if(!r1.data?.elements){ log.push({t:'err', msg:`戦略D(bus): relation取得失敗 (${dt1}秒)`}); return null; }
+  let rels=r1.data.elements.filter(e=>e.type==='relation');
+  log.push({t:'ok', msg:`戦略D(bus) Step1: ${r1.cached?'キャッシュ':'API'+(r1.endpoint?'('+r1.endpoint+')':'')}から relation ${rels.length}件 (${dt1}秒)`});
+  log.push({t:'info', msg:`　検索路線名: ${lineNames.join(' / ')||'(指定なし)'}`});
+  if(!rels.length){
+    // relが無ければ way[route=bus] 直接取得にフォールバック
+    log.push({t:'info', msg:'　route=bus relationなし → way[route=bus]直接取得を試行'});
+    const wParts=[];
+    for(const b of boxes){ if(nameRegex) wParts.push(`  way["route"="bus"]["name"~"${nameRegex}"](${boxOf(b)});`); wParts.push(`  way["route"="bus"](${boxOf(b)});`); }
+    const q2=`[out:json][timeout:15];
+(
+${wParts.join('\n')}
+);
+out geom;`;
+    const t2=performance.now();
+    const r2=await fetchOverpass(q2, log);
+    const dt2=((performance.now()-t2)/1000).toFixed(1);
+    const wayEls=(r2.data?.elements||[]).filter(e=>e.type==='way'&&e.geometry?.length>=2);
+    wayEls.forEach(w=>{ w._relId=null; });
+    log.push({t:wayEls.length?'ok':'warn', msg:`戦略D(bus): way直接取得 ${wayEls.length}件 (${dt2}秒)`});
+    return wayEls.length ? {wayEls, relNames:['(bus way直接)']} : null;
+  }
+  // Step2: 各relationのway geometry
+  const relNames=rels.map(r=>r.tags?.name).filter(Boolean);
+  const allWays=[]; const seen=new Set();
+  const t2=performance.now();
+  for(const rel of rels){
+    const q=`[out:json][timeout:20];
+relation(id:${rel.id});
+way(r);
+out geom;`;
+    const rr=await fetchOverpass(q, log);
+    const ways=(rr.data?.elements||[]).filter(e=>e.type==='way'&&e.geometry?.length>=2);
+    for(const w of ways){ if(seen.has(w.id)) continue; seen.add(w.id); w._relId=rel.id; allWays.push(w); }
+  }
+  const dt2=((performance.now()-t2)/1000).toFixed(1);
+  log.push({t:'ok', msg:`戦略D(bus) Step2: relation ${rels.length}件から way ${allWays.length}件取得 (${dt2}秒)`});
+  log.push({t:'info', msg:`　bus路線名: ${[...new Set(relNames)].join(' / ')||'(なし)'}`});
+  return allWays.length ? {wayEls:allWays, relNames} : null;
+}
+
 async function fetchRailCoords(seg, log){
   if(seg.fallbackSkip){ log.push({t:'info', msg:'fallbackSkip指定 → API取得せず直線描画'}); return null; }
   const bbox=calcBbox(seg);
@@ -1040,53 +1158,98 @@ async function fetchRailCoords(seg, log){
   // ルート探索: 戦略Aの名前一致wayで最短経路。届かなければ戦略B(エリア)。
   const directLen = haversine(fromCoord, toCoord);
 
-  // 1グラフ分のルート探索（起点ノード→終点ノードの最短経路）
+  // via座標リスト（経路を必ず通過させる経由点）。parseViaで正規化済みのものを使う。
+  const viaPts = parseVia(seg).map(v=>v.pt);
+
+  // 1レグ（pA→pB）の最短経路をグラフ上で求める。返り値に各種メタを含む。
+  //  経路が無い場合は到達範囲の最近接ノードまで（partial/代替）を返す。完全不能はnull。
+  const routeLeg = (graph, pA, pB, label) => {
+    const s = nearestNodeKey(graph.adj, graph.ways, pA);
+    const e = nearestNodeKey(graph.adj, graph.ways, pB);
+    if(!s.key || !e.key) return null;
+    const r = dijkstraRoute(graph, s.key, e.key);
+    if(r.found){
+      return {coords:r.coords, startGap:s.dist, endGap:e.dist, routeLen:r.routeLen, relIds:[...r.relIds], wayIds:r.wayIds, partial:false, snapNodes:graph.adj.size, wayCount:graph.ways.length};
+    }
+    // 非連結 → 到達範囲の終点最近接まで部分復元
+    const near = nearestReachable(r.reached, nodeCoordMap(graph.ways), pB);
+    if(near && near.key !== s.key){
+      const edges = []; let cur = near.key;
+      while(cur !== s.key){ const p = r.prev.get(cur); if(!p) break; edges.unshift(p.edge); cur = p.from; }
+      if(edges.length > 0){
+        const coords = []; const relIds = new Set(); const wayIds = new Set();
+        for(const edge of edges){
+          if(coords.length === 0) coords.push(...edge.coords); else coords.push(...edge.coords.slice(1));
+          if(edge.relId != null) relIds.add(edge.relId);
+          const w = graph.ways[edge.wayIdx]; if(w && w.wayId!=null) wayIds.add(w.wayId);
+        }
+        return {coords, startGap:s.dist, endGap:near.gap, routeLen:r.dist.get(near.key)||0, relIds:[...relIds], wayIds, partial:near.gap>NEAR_STATION, brokenAt:near.coord, snapNodes:graph.adj.size, wayCount:graph.ways.length};
+      }
+    }
+    return {coords:null, startGap:s.dist, endGap:Infinity, routeLen:0, relIds:[], wayIds:new Set(), partial:true, unreachable:true, brokenAt:near?near.coord:null};
+  };
+
+  // 1グラフ分のルート探索。viaがあれば 出発→経由1→…→経由N→到着 を連結（経由駅を必ず通る）。
   const solve = (ways, label) => {
     const graph = buildGraph(ways);
-    const s = nearestNodeKey(graph.adj, graph.ways, fromCoord);
-    const e = nearestNodeKey(graph.adj, graph.ways, toCoord);
-    if(!s.key || !e.key){ log.push({t:'warn', msg:`　${label}: スナップできるノードなし`}); return null; }
-    log.push({t:'info', msg:`　${label}: 乗車駅スナップ ${s.dist.toFixed(0)}m / 降車駅スナップ ${e.dist.toFixed(0)}m / ノード数 ${graph.adj.size} / way数 ${graph.ways.length}`});
-    const r = dijkstraRoute(graph, s.key, e.key);
-    if(!r.found){
-      // 経路なし＝非連結。到達範囲内の降車駅最近接ノードまでの経路を復元する。
-      //  ・NEAR_STATION以内 → 従来通り「代替経路」として通常採用
-      //  ・NEAR_STATION超   → 「部分経路」(partial)として返し、呼び出し側で端点→駅を赤点線コネクタ描画（分断デバッグ用）
-      const near = nearestReachable(r.reached, nodeCoordMap(graph.ways), toCoord);
-      if(near && near.key !== s.key){
-        const edges = []; let cur = near.key;
-        while(cur !== s.key){
-          const p = r.prev.get(cur);
-          if(!p) break;
-          edges.unshift(p.edge); cur = p.from;
-        }
-        if(edges.length > 0){
-          const coords = []; const relIds = new Set(); const wayIds = new Set();
-          for(const edge of edges){
-            if(coords.length === 0) coords.push(...edge.coords);
-            else coords.push(...edge.coords.slice(1));
-            if(edge.relId != null) relIds.add(edge.relId);
-            const w = graph.ways[edge.wayIdx]; if(w && w.wayId!=null) wayIds.add(w.wayId);
-          }
-          const routeLen = r.dist.get(near.key) || 0;
-          const isPartial = near.gap > NEAR_STATION;
-          if(isPartial){
-            log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 到達可能な最近接ノード（降車駅まで残り${(near.gap/1000).toFixed(1)}km）まで部分経路を復元`});
-            log.push({t:'info', msg:`　　分断推定位置 [${near.coord[0].toFixed(4)},${near.coord[1].toFixed(4)}] 付近`});
-          } else {
-            log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 最近接到達ノード(${near.gap.toFixed(0)}m手前)で代替経路を復元`});
-          }
-          log.push({t:isPartial?'warn':'ok', msg:`　${label}: ${isPartial?'部分':'代替'}経路 経路長 ${(routeLen/1000).toFixed(1)}km / 区間${edges.length} / relation[${[...relIds].join(',')||'-'}]`});
-          return {coords, startGap:s.dist, endGap:near.gap, routeLen, relIds:[...relIds], wayIdSet:wayIds, isNearFallback:!isPartial, partial:isPartial};
-        }
+    if(!graph.ways.length){ log.push({t:'warn', msg:`　${label}: way無し`}); return null; }
+
+    // 通過点列: [出発, via..., 到着]
+    const pts = [fromCoord, ...viaPts, toCoord];
+    if(viaPts.length){
+      log.push({t:'info', msg:`　${label}: 経由駅優先で ${pts.length-1} レグに分割（${viaPts.map((p,i)=>`経由${i+1}[${p[0].toFixed(3)},${p[1].toFixed(3)}]`).join(' → ')}）`});
+    }
+
+    const allCoords=[]; const allRel=new Set(); const allWay=new Set();
+    let totalLen=0, startGap=null, endGap=0, anyPartial=false, brokenAt=null;
+    for(let i=0;i<pts.length-1;i++){
+      const legLabel = viaPts.length ? `${label} レグ${i+1}/${pts.length-1}` : label;
+      const leg = routeLeg(graph, pts[i], pts[i+1], legLabel);
+      if(!leg){ log.push({t:'warn', msg:`　${legLabel}: スナップできるノードなし`}); return null; }
+      if(i===0) startGap = leg.startGap;
+      endGap = leg.endGap;
+      if(leg.coords && leg.coords.length){
+        if(allCoords.length===0) allCoords.push(...leg.coords);
+        else allCoords.push(...leg.coords.slice(1)); // レグ境界の重複点を除去
+        leg.relIds.forEach(x=>allRel.add(x));
+        leg.wayIds.forEach(x=>allWay.add(x));
+        totalLen += leg.routeLen;
       }
-      log.push({t:'warn', msg:`　${label}: 経路なし（起点と終点が非連結・部分経路も復元不可）`});
-      if(near) log.push({t:'info', msg:`　　起点側到達範囲の降車駅最近接 [${near.coord[0].toFixed(4)},${near.coord[1].toFixed(4)}] が降車駅から ${near.gap.toFixed(0)}m（この付近で分断の可能性）`});
+      if(leg.partial || leg.unreachable){
+        anyPartial = true; brokenAt = leg.brokenAt || brokenAt;
+        if(viaPts.length) log.push({t:'warn', msg:`　${legLabel}: このレグが未達（残り${(leg.endGap/1000).toFixed(1)}km）${leg.brokenAt?` 分断[${leg.brokenAt[0].toFixed(4)},${leg.brokenAt[1].toFixed(4)}]`:''}`});
+        // viaレグの途中で切れたら以降のレグは繋がらないので打ち切り（描けた所まで）
+        if(leg.unreachable) break;
+      }
+    }
+    if(allCoords.length<2){
+      log.push({t:'warn', msg:`　${label}: 有効な経路を構築できず（非連結・部分復元不可）`});
+      if(brokenAt) log.push({t:'info', msg:`　　分断推定位置 [${brokenAt[0].toFixed(4)},${brokenAt[1].toFixed(4)}] 付近`});
       return null;
     }
-    log.push({t:'ok', msg:`　${label}: 経路発見 経路長 ${(r.routeLen/1000).toFixed(1)}km / 区間${r.hops} / relation[${[...r.relIds].join(',')||'-'}]`});
-    return {coords:r.coords, startGap:s.dist, endGap:e.dist, routeLen:r.routeLen, relIds:[...r.relIds], wayIdSet:r.wayIds, partial:false};
+    const relArr=[...allRel];
+    if(anyPartial){
+      log.push({t:'warn', msg:`　${label}: ${viaPts.length?'経由連結の一部が':''}未達 → 到達分を部分描画 経路長 ${(totalLen/1000).toFixed(1)}km / relation[${relArr.join(',')||'-'}]`});
+      if(brokenAt) log.push({t:'info', msg:`　　分断推定位置 [${brokenAt[0].toFixed(4)},${brokenAt[1].toFixed(4)}] 付近`});
+    } else {
+      log.push({t:'ok', msg:`　${label}: 経路発見${viaPts.length?'（経由駅を通過）':''} 経路長 ${(totalLen/1000).toFixed(1)}km / relation[${relArr.join(',')||'-'}]`});
+    }
+    log.push({t:'info', msg:`　${label}: 乗車駅スナップ ${startGap.toFixed(0)}m / 降車駅スナップ ${endGap.toFixed(0)}m / ノード数 ${graph.adj.size} / way数 ${graph.ways.length}`});
+    return {coords:allCoords, startGap, endGap, routeLen:totalLen, relIds:relArr, wayIdSet:allWay, partial:anyPartial};
   };
+
+  // ---- 戦略D: 路線バス（route=bus）。電車系と独立。最優先で分岐（"バス"名称が索道判定に
+  //  誤って引っかかるのを防ぐためCより先に判定）。 ----
+  if(isBusSeg(seg)){
+    log.push({t:'info', msg:`戦略D対象（route=bus）${seg.busQuery?'：busQuery指定':'：type/名称から自動判定'}`});
+    const resD = await strategyByBus(seg, bbox, log);
+    const rD = (resD && resD.wayEls.length) ? solve(resD.wayEls, '戦略D(bus)') : null;
+    if(!rD || rD.coords.length<2){
+      log.push({t:'err', msg:'戦略D(bus): 有効な経路を構築できず → fallback採用'});
+      return null;
+    }
+    return finalize(rD);
+  }
 
   // ---- 戦略C: フェリー/ケーブル/ロープウェイ ----
   // wayQuery明示 または type/名前から自動判定（resolveWayQuery）で該当すれば専用ルート。
@@ -1206,7 +1369,8 @@ async function fetchRailCoords(seg, log){
     const connectors=[];
     if(b.startGap > NEAR_STATION) connectors.push([[fromCoord[0],fromCoord[1]],[b.coords[0][0],b.coords[0][1]]]);
     if(b.endGap > NEAR_STATION) connectors.push([[b.coords[b.coords.length-1][0],b.coords[b.coords.length-1][1]],[toCoord[0],toCoord[1]]]);
-    const isPartial = connectors.length>0;
+    // partial = 端点ギャップ超過 または solve内でvia中間レグが断絶していた場合
+    const isPartial = connectors.length>0 || !!b.partial;
     log.push({t:isPartial?'warn':'ok', msg:`採用: 降車駅ギャップ ${b.endGap.toFixed(0)}m${isPartial?'（未達側を赤点線コネクタで駅まで接続・デバッグ表示）':''}`});
     log.push({t:'info', msg:`　始点ギャップ ${b.startGap.toFixed(0)}m / 終点ギャップ ${b.endGap.toFixed(0)}m`});
     log.push({t:'info', msg:`　経路長 ${(b.routeLen/1000).toFixed(1)}km（直線距離 ${(directLen/1000).toFixed(1)}km）`});
@@ -1486,7 +1650,7 @@ function downloadLog(){
   const nB=keys.filter(k=>LOG[k].strategy==='B').length;
   const nPart=keys.filter(k=>LOG[k].result==='osm'&&LOG[k].partial).length;
   const nAtoB=keys.filter(k=>LOG[k].aToB).length;
-  const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk}（高速パス ${nF} / 戦略A ${nA} / 戦略B ${nB} / うち部分描画🔶 ${nPart}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}`, cacheStats()];
+  const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk}（高速パス ${nF} / 戦略A ${nA} / 戦略B ${nB} / うち部分描画🔶 ${nPart}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}`, totalTimeStr(), cacheStats()];
   for(const seg of SEGS){
     const lg=LOG[`${seg.di}-${seg.si}`];
     if(!lg) continue;
@@ -1519,7 +1683,7 @@ function renderLog(focusKey){
   const nPart=keys.filter(k=>LOG[k].result==='osm'&&LOG[k].partial).length;
   const nAtoB=keys.filter(k=>LOG[k].aToB).length;
   document.getElementById('log-summary').textContent =
-    `合計${keys.length}区間 / API成功(OSM描画)${nOk}（高速パス ${nF} / 戦略A ${nA} / 戦略B ${nB} / うち部分描画🔶 ${nPart}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}` + ' ｜ ' + cacheStats();
+    `合計${keys.length}区間 / API成功(OSM描画)${nOk}（高速パス ${nF} / 戦略A ${nA} / 戦略B ${nB} / うち部分描画🔶 ${nPart}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}` + ' ｜ ' + totalTimeStr() + ' ｜ ' + cacheStats();
 
   for(const seg of SEGS){
     const key=`${seg.di}-${seg.si}`;
@@ -1562,10 +1726,12 @@ function escapeHtml(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>
 let done=0;
 async function loadAll(){
   const total=SEGS.length;
+  WALL_START=performance.now(); WALL_END=null;
   document.getElementById('progress-label').textContent=`0/${total}`;
   for(const seg of SEGS){
     await loadOneSeg(seg);
   }
+  WALL_END=performance.now();
   document.getElementById('status-text').textContent='✅ 読み込み完了';
   buildDotJump();
   const allPls=Object.values(plMap).map(e=>e.osm||e.fallback).filter(Boolean);
@@ -1637,6 +1803,8 @@ async function loadOneSeg(seg){
   const total=SEGS.length;
   document.getElementById('progress-fill').style.width=Math.round(done/total*100)+'%';
   document.getElementById('progress-label').textContent=`${done}/${total}`;
+  // 未発見/部分リストを逐次更新（最後まで待たずに途中経過で見える）
+  buildDotJump();
 }
 </script>
 </body>
