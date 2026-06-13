@@ -210,7 +210,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0613-5
+// rail_trip_map 0613-6
+//  ★0613-6: ①via区間のキャッシュ保存を完全版に（高速パスでvia経路を再現可能化）。
+//      原因: 大型relationの間引き保存(採用wayのみ)が、via区間ではレグ境界(経由駅)の連結に
+//      必要なwayを落とし、高速パスのレグ連結が断絶→毎回フル再取得(数十秒)になっていた。
+//      （実測: ひのとり 戦略Aフル775way→経路成立 / 高速パス間引き433way→レグ2が63.9km未達）
+//      対策: parseVia(seg)が非空の区間は relCacheSet に usedWayIdSet=null を渡し間引きしない。
+//    ②via区間で採用relationが間引きキャッシュ(p:1)のままなら高速パスをスキップし、
+//      通常フローで完全版を取得・保存（無駄な高速パス試行を回避）。relCacheIsPartial追加。
+//  （旧: 0613-5）
+//  ★0613-5: ログ秒数正確化+合計 / 未達リスト逐次 / via経由優先 / route=bus(戦略D) / 詳細下半分
+//  ★0613-3: wayQuery自動判定 / aerialway / 点線リスト開閉
+//  ★0613-2: フェリー・ケーブル(戦略C) / 点線ジャンプ / 未達・直線のみ
+//  ★0613-1: 日別表示 / via / 高速パス / 部分描画 / 大型rel間引き / 採用rel保護
+//  ★0611-1
 //  ★0613-5: （0613-3ベース。0613-4のマルチソース改修はrelIds型不整合バグで全滅したため不採用）
 //    ①ログ秒数の正確化＋合計表示: 各区間の計測を1本化（タイミングの重複/漏れ解消）。
 //      サマリーとログ画面に「合計処理時間」を表示。
@@ -530,6 +543,16 @@ function relCacheGet(relId, allowPartial=false){
     if(obj.p && !allowPartial) return null;
     return obj.ways;
   } catch(e){ return null; }
+}
+// relationキャッシュが間引き保存(p:1)かどうか（完全版なら false、未保持も false）。
+function relCacheIsPartial(relId){
+  try {
+    const raw = localStorage.getItem(relCacheKey(relId));
+    if(!raw) return false;
+    const obj = JSON.parse(raw);
+    if(Date.now()-obj.ts > CACHE_TTL) return false;
+    return !!obj.p;
+  } catch(e){ return false; }
 }
 // usedWayIdSet: 採用経路で実際に使ったwayのidセット。
 // way数>LARGE_REL_WAYS のrelationは該当wayだけを間引き保存(p:1)し、既存の間引きエントリとway id単位でマージ蓄積
@@ -1275,6 +1298,19 @@ async function fetchRailCoords(seg, log){
   {
     const adopted = segRelsGet(seg);
     if(adopted && adopted.length){
+      // via区間は経路再現にrelationの完全なwayが必要。採用relationのいずれかが間引き保存(partial)
+      // だと高速パスのレグ連結が断絶するため、高速パスを試さず通常フロー（完全版を取得・保存）へ。
+      const hasVia = parseVia(seg).length > 0;
+      let anyPartialCache = false;
+      if(hasVia){
+        for(const rid of adopted){
+          if(SESSION_REL_GEOM.has(rid)) continue; // セッション完全版があればOK
+          if(relCacheIsPartial(rid)){ anyPartialCache = true; break; }
+        }
+      }
+      if(hasVia && anyPartialCache){
+        log.push({t:'info', msg:'高速パス: via区間かつ採用relationが間引きキャッシュ → スキップし通常フローで完全版を取得・保存'});
+      } else {
       const cachedWays=[]; const seenW=new Set(); let missing=null;
       for(const rid of adopted){
         const ways = SESSION_REL_GEOM.get(rid) || relCacheGet(rid, true);
@@ -1298,6 +1334,7 @@ async function fetchRailCoords(seg, log){
         try { localStorage.removeItem(segRelsKey(seg)); } catch(e){}
       } else if(missing!=null){
         log.push({t:'info', msg:`高速パス: relation ${missing} がキャッシュ未保持 → 通常フロー（Step2内の採用分限定取得は有効）`});
+      }
       }
     }
   }
@@ -1340,12 +1377,16 @@ async function fetchRailCoords(seg, log){
   // （部分経路・始点側大ズレを保存すると高速パスが誤経路を再生するため除外）。
   // このセッションでAPI取得した分のみ書く（永続化成功でSESSION_FETCHEDから外す＝以後の区間で再書込しない）。
   // 大型relation（way数>LARGE_REL_WAYS）は採用経路のwayだけ間引き保存。
+  //  ただしvia区間は間引きすると高速パスでレグ境界（経由駅）が繋がらず経路再現に失敗するため、
+  //  完全保存する（usedWayIdSet=null を渡すと relCacheSet は間引きしない）。
   if(result && result.relIds && result.relIds.length && !result.partial
      && result.startGap <= NEAR_STATION && result.endGap <= NEAR_STATION){
+    const hasVia = parseVia(seg).length > 0;
     let wrote=0; const thinned=[];
     for(const rid of result.relIds){
       if(SESSION_FETCHED.has(rid) && SESSION_REL_GEOM.has(rid)){
-        const rr = relCacheSet(rid, SESSION_REL_GEOM.get(rid), result.wayIdSet);
+        // via区間は間引きしない（完全保存）。それ以外は従来通り採用wayのみ間引き。
+        const rr = relCacheSet(rid, SESSION_REL_GEOM.get(rid), hasVia ? null : result.wayIdSet);
         if(rr.ok){
           wrote++; SESSION_FETCHED.delete(rid);
           if(rr.partial) thinned.push(`${rid}: ${rr.total}→${rr.saved}way`);
@@ -1353,7 +1394,7 @@ async function fetchRailCoords(seg, log){
       }
     }
     segRelsSet(seg, result.relIds);
-    log.push({t:'info', msg:`　採用relationをキャッシュ保存（新規${wrote}件 / 採用計${result.relIds.length}件${thinned.length?` / 間引き ${thinned.join(', ')}`:''}）`});
+    log.push({t:'info', msg:`　採用relationをキャッシュ保存（新規${wrote}件 / 採用計${result.relIds.length}件${hasVia?'・via区間のため完全保存':''}${thinned.length?` / 間引き ${thinned.join(', ')}`:''}）`});
   }
 
   if(!result || result.coords.length<2){
