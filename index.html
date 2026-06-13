@@ -34,7 +34,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #ph-dotonly{color:#c0392b;font-weight:600;}
 #dot-jump{margin-top:8px;}
 #dot-jump.empty{display:none;}
-.dj-head{font-size:11px;font-weight:700;color:#c0392b;margin-bottom:4px;}
+.dj-head{font-size:11px;font-weight:700;color:#c0392b;margin-bottom:4px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:5px;}
+.dj-head:hover{color:#a93226;}
+.dj-caret{font-size:9px;flex-shrink:0;}
+.dj-list{}
+#dot-jump.collapsed .dj-list{display:none;}
 .dj-item{display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;border-radius:5px;cursor:pointer;border:1px solid #f0d0c8;background:#fff7f5;margin-bottom:3px;}
 .dj-item:hover{background:#ffe9e3;}
 .dj-icon{flex-shrink:0;}
@@ -195,7 +199,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0613-2
+// rail_trip_map 0613-3
+//  ★0613-3: ①wayQueryの自動判定: seg.wayQuery未指定でも、type=="ferry"なら"ferry"、
+//      type=="cable"または路線名/区間名に「ケーブル/鋼索/ロープ/索道/funicular」を含めば
+//      "funicular"とみなす（resolveWayQuery）。JSONにwayQueryを書かなくてもフェリー/索道が
+//      戦略Cで描画される。ロープウェイ(aerialway)も funicular クエリに aerialway を併用して拾う。
+//      明示の seg.wayQuery があればそれを最優先。seg.wayQuery==="none" で自動判定を無効化可。
+//    ②点線ジャンプリストの開閉: 見出しクリックで本体を折りたたみ（既定で開）。リストが長い時に
+//      畳んで通常路線を見やすくできる。開閉状態は localStorage に記憶。
+//    ③戦略Cにロープウェイ(aerialway)対応: 叡山ロープウェイ等は way[aerialway] で取得。
+//  （旧: 0613-2）
+//  ★0613-2: ①フェリー・ケーブルカー対応(戦略C) ②点線区間ジャンプ ③未達/直線のみ表示トグル
+//  ★0613-1: 日別表示 / via / 高速パス / 部分描画 / 大型rel間引き / 採用rel保護
+//  ★0611-1
 //  ★0613-2: ①フェリー・ケーブルカー対応（戦略C）: route=ferry / railway=funicular のwayは
 //      単独way主体で、relation検索(戦略A)では拾えない。seg.wayQuery（"ferry"|"funicular"）が
 //      指定された区間は、way[route=ferry|railway=funicular][name~lineNames](bbox); out geom; で
@@ -943,30 +959,52 @@ out geom;`;
   return {wayEls, relNames:['(エリア検索)']};
 }
 
-// 戦略C: フェリー(route=ferry)・ケーブルカー(railway=funicular)を way名で直接取得。
-//  これらは単独way主体でrelation検索(戦略A)では拾えないため、name一致のwayを1クエリで取得する。
-//  seg.wayQuery: "ferry" | "funicular"（複数は配列も可）。lineNames でway名を絞り込む。
-//  発着駅±0.02°のunion bbox（フェリーは航路が長いので戦略Aより広め）。
-async function strategyByWayName(seg, bbox, log){
-  const kinds = Array.isArray(seg.wayQuery) ? seg.wayQuery : [seg.wayQuery];
+// seg.wayQuery を解決（明示指定が最優先。未指定なら type/名前から自動判定）。
+//  返り値: 文字列配列（"ferry" | "funicular" | "aerialway"）。該当なしは []。
+//  seg.wayQuery==="none" で自動判定を無効化。
+function resolveWayQuery(seg){
+  if(seg.wayQuery==='none') return [];
+  if(seg.wayQuery) return Array.isArray(seg.wayQuery) ? seg.wayQuery : [seg.wayQuery];
+  const kinds = [];
+  const ty = seg.type || '';
+  const txt = `${seg.name||''} ${(seg.lineNames||[]).join(' ')} ${seg.lineName||''}`;
+  if(ty==='ferry' || /フェリー|航路|汽船|連絡船|渡船|ferry/i.test(txt)) kinds.push('ferry');
+  if(/ロープウェ|ロープウェイ|ゴンドラ|索道|aerial|ropeway/i.test(txt)) kinds.push('aerialway');
+  if(ty==='cable' || /ケーブル|鋼索|funicular/i.test(txt)) kinds.push('funicular');
+  return [...new Set(kinds)];
+}
+
+// 戦略C: フェリー(route=ferry)・ケーブル(railway=funicular)・ロープウェイ(aerialway)を way で直接取得。
+//  これらは単独way主体でrelation検索(戦略A)では拾えないため、タグ一致のwayを1クエリで取得する。
+//  kinds: resolveWayQuery(seg) の結果。lineNames があれば名前で絞り込むが、
+//  名前がOSM実名と食い違うケースに備え「名前なし(タグのみ)」も union して必ず拾えるようにする。
+//  発着駅±0.02°のunion bbox（航路・索道は駅間が空くので広め）。
+async function strategyByWayName(seg, bbox, log, kinds){
+  kinds = kinds || resolveWayQuery(seg);
   const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
   const dep = seg.fallback?.[0], arr = seg.fallback?.[seg.fallback.length-1];
   if(!dep || !arr){ log.push({t:'err', msg:'戦略C: 始終点座標なし'}); return null; }
-  const delta = 0.02; // ±0.02°≈2.2km（航路・索道は駅間が空くので広め）
+  const delta = 0.02; // ±0.02°≈2.2km
   const fmt = v => v.toFixed(5);
   const boxOf = pt => `${fmt(pt[0]-delta)},${fmt(pt[1]-delta)},${fmt(pt[0]+delta)},${fmt(pt[1]+delta)}`;
   const isSamePoint = dep[0]===arr[0] && dep[1]===arr[1];
   const boxes = isSamePoint ? [dep] : [dep, arr];
-  // tag条件: ferry→["route"="ferry"], funicular→["railway"="funicular"]
-  const tagCond = k => k==='ferry' ? `["route"="ferry"]` : k==='funicular' ? `["railway"="funicular"]` : null;
-  const nameCond = lineNames.length ? `["name"~"${lineNames.map(escapeRegex).join('|')}"]` : '';
+  // tag条件: ferry→route=ferry, funicular→railway=funicular, aerialway→aerialway(全種)
+  const tagCond = k => k==='ferry' ? `["route"="ferry"]`
+                    : k==='funicular' ? `["railway"="funicular"]`
+                    : k==='aerialway' ? `["aerialway"]` : null;
+  const nameRegex = lineNames.length ? lineNames.map(escapeRegex).join('|') : null;
   const parts = [];
   for(const k of kinds){
     const tc = tagCond(k);
     if(!tc){ log.push({t:'warn', msg:`戦略C: 未知のwayQuery「${k}」をスキップ`}); continue; }
-    for(const b of boxes) parts.push(`  way${tc}${nameCond}(${boxOf(b)});`);
+    for(const b of boxes){
+      // 名前ありで絞った候補 + 名前なし(タグのみ)候補 の両方をunion（名前不一致でも拾う）
+      if(nameRegex) parts.push(`  way${tc}["name"~"${nameRegex}"](${boxOf(b)});`);
+      parts.push(`  way${tc}(${boxOf(b)});`);
+    }
   }
-  if(!parts.length) return null;
+  if(!parts.length){ log.push({t:'warn', msg:'戦略C: 対象種別なし（resolveWayQueryが空）'}); return null; }
   const q=`[out:json][timeout:15];
 (
 ${parts.join('\n')}
@@ -1050,10 +1088,13 @@ async function fetchRailCoords(seg, log){
     return {coords:r.coords, startGap:s.dist, endGap:e.dist, routeLen:r.routeLen, relIds:[...r.relIds], wayIdSet:r.wayIds, partial:false};
   };
 
-  // ---- 戦略C: フェリー/ケーブルカー（wayQuery指定区間） ----
-  // これらは単独way主体でrelation検索に乗らないため、専用ルートで処理し戦略A/B/高速パスはスキップ。
-  if(seg.wayQuery){
-    const resC = await strategyByWayName(seg, bbox, log);
+  // ---- 戦略C: フェリー/ケーブル/ロープウェイ ----
+  // wayQuery明示 または type/名前から自動判定（resolveWayQuery）で該当すれば専用ルート。
+  // これらは単独way主体でrelation検索に乗らないため、戦略A/B/高速パスはスキップ。
+  const wqKinds = resolveWayQuery(seg);
+  if(wqKinds.length){
+    log.push({t:'info', msg:`戦略C対象（${wqKinds.join('/')}）${seg.wayQuery?'：wayQuery指定':'：type/名称から自動判定'}`});
+    const resC = await strategyByWayName(seg, bbox, log, wqKinds);
     const rC = (resC && resC.wayEls.length) ? solve(resC.wayEls, '戦略C') : null;
     if(!rC || rC.coords.length<2){
       log.push({t:'err', msg:'戦略C: 有効な経路を構築できず → fallback採用'});
@@ -1362,6 +1403,7 @@ function buildLegend(){
 
 // 点線（未発見⚠ / 部分描画🔶）区間のジャンプリストをパネル上部に生成。
 // ➖skip（意図的にAPI取得しない区間）は「発見失敗」ではないので除外。
+// 見出しクリックで本体を折りたたみ可能（リストが長い時に通常路線を見やすくする）。開閉状態は永続化。
 function buildDotJump(){
   const box=document.getElementById('dot-jump');
   if(!box) return;
@@ -1377,16 +1419,23 @@ function buildDotJump(){
   }
   if(!items.length){ box.classList.add('empty'); return; }
   box.classList.remove('empty');
+
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('dotJumpCollapsed')==='1'; } catch(e){}
+
   const head=document.createElement('div'); head.className='dj-head';
-  head.textContent=`⚠ 未発見/部分の区間（${items.length}）— クリックでズーム`;
-  box.appendChild(head);
+  const caret=document.createElement('span'); caret.className='dj-caret';
+  const headText=document.createElement('span');
+  headText.textContent=`未発見/部分の区間（${items.length}）`;
+  head.appendChild(caret); head.appendChild(headText);
+
+  const list=document.createElement('div'); list.className='dj-list';
   for(const {seg, key, lg, isPartial} of items){
     const it=document.createElement('div'); it.className='dj-item';
     const ic=document.createElement('span'); ic.className='dj-icon'; ic.textContent=isPartial?'🔶':'⚠';
     const nm=document.createElement('span'); nm.className='dj-name'; nm.textContent=seg.name;
     const dy=document.createElement('span'); dy.className='dj-day'; dy.textContent=`${seg.di+1}日目`;
     it.appendChild(ic); it.appendChild(nm);
-    // 部分描画はギャップ距離（残り）を表示
     if(isPartial && lg.endGap!=null){
       const gp=document.createElement('span'); gp.className='dj-gap';
       gp.textContent = lg.endGap>=1000 ? `残${(lg.endGap/1000).toFixed(1)}km` : `残${Math.round(lg.endGap)}m`;
@@ -1394,12 +1443,26 @@ function buildDotJump(){
     }
     it.appendChild(dy);
     it.onclick=()=>{
-      // 非表示中でも飛べるよう、その日を表示ONにしてからズーム
       if(!dayVisible(seg.di)){ const c=document.getElementById(`chk-day-${seg.di}`); if(c){c.checked=true;} toggleDay(seg.di,true); }
       selectSeg(seg.di,seg.si);
     };
-    box.appendChild(it);
+    list.appendChild(it);
   }
+
+  const applyCollapsed = () => {
+    box.classList.toggle('collapsed', collapsed);
+    caret.textContent = collapsed ? '▶' : '▼';
+    headText.textContent = collapsed ? `未発見/部分の区間（${items.length}）— クリックで開く` : `未発見/部分の区間（${items.length}）— クリックで閉じる`;
+  };
+  head.onclick=()=>{
+    collapsed=!collapsed;
+    try { localStorage.setItem('dotJumpCollapsed', collapsed?'1':'0'); } catch(e){}
+    applyCollapsed();
+  };
+  applyCollapsed();
+
+  box.appendChild(head);
+  box.appendChild(list);
 }
 
 // =====================================================================
