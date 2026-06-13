@@ -199,7 +199,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0613-3
+// rail_trip_map 0613-4
+//  ★0613-4: ①マルチソース/ターゲット経路探索: 乗降駅近傍の複数ノード(半径600m,最低4件)を
+//      起点・終点候補にして最良経路を選ぶ。1ノードへの固定スナップで非連結になる問題を解消。
+//      具体例: 池島フェリー帰路が、池島港の最近接ノードが別系統way「進栄丸」の端点(27m)に
+//      吸われ、瀬戸へ向かう「瀬戸・池島フェリー」wayと非連結→未達 となっていた。複数起点を
+//      試すことで往復どちらも正しい航路wayに乗る。鉄道の駅構内分岐・複数ホームにも有効。
+//      性能: 大グラフは「最近接ペアをearly-break探索」で即決し、不十分時のみ多重全探索。
+//    ②dijkstraRouteにendKey=null（全探索）モードを追加（到達範囲dist/prev/reachedを返す）。
+//  （旧: 0613-3）
+//  ★0613-3: wayQuery自動判定(type/名称) / ロープウェイ(aerialway)対応 / 点線リスト開閉
+//  ★0613-2: フェリー・ケーブル対応(戦略C) / 点線ジャンプ / 未達・直線のみ表示
+//  ★0613-1: 日別表示 / via / 高速パス / 部分描画 / 大型rel間引き / 採用rel保護
+//  ★0611-1
 //  ★0613-3: ①wayQueryの自動判定: seg.wayQuery未指定でも、type=="ferry"なら"ferry"、
 //      type=="cable"または路線名/区間名に「ケーブル/鋼索/ロープ/索道/funicular」を含めば
 //      "funicular"とみなす（resolveWayQuery）。JSONにwayQueryを書かなくてもフェリー/索道が
@@ -719,6 +731,27 @@ function nearestNodeKey(adj, ways, coord){
   return {key:best, dist:bd};
 }
 
+// coord周辺のノードキーを近い順に複数返す（マルチソース探索用）。
+//  radiusM以内のノードを集める。半径内が無い場合のみ最近接1件を返す（遠方ノードの巻き込み防止）。
+//  目的: 駅近傍に複数の端点（別系統way・別ホーム）がある時、1つに固定スナップして
+//  非連結になるのを避け、到達できる候補から最良経路を選ぶ。フェリーの往復非対称も解消。
+//  注意: maxKeepは「半径内候補の上限件数」。半径内が無ければ最近接のみ（遠方を起点候補にしない）。
+function nearestNodeKeys(ways, coord, radiusM, maxKeep){
+  const seen=new Map(); // key -> dist（同一クラスタkeyは最小距離で代表）
+  for(const w of ways){
+    const cand=[[w.coords[0],w.startKey],[w.coords[w.coords.length-1],w.endKey]];
+    for(const [pt,key] of cand){
+      const d=haversine(coord, pt);
+      if(!seen.has(key) || d<seen.get(key)) seen.set(key,d);
+    }
+  }
+  const sorted=[...seen.entries()].map(([key,dist])=>({key,dist})).sort((a,b)=>a.dist-b.dist);
+  if(!sorted.length) return [];
+  const within=sorted.filter(o=>o.dist<=radiusM);
+  // 半径内があればそれを上限maxKeep件。無ければ最近接1件のみ（遠方ノードは候補にしない）。
+  return within.length ? within.slice(0, maxKeep||4) : [sorted[0]];
+}
+
 // --- 最短経路探索（Dijkstra） ---
 // buildGraph のノードグラフ上で、起点ノード→終点ノードの最短経路を求める。
 // 辺重み = way区間長。得られる経路は単一の連続ポリライン（往復スパーを含まない）。
@@ -739,6 +772,7 @@ class MinHeap{
 }
 
 // startKey→endKey の最短経路。返り値 {found, coords, routeLen, relIds, hops, reached(Set)}
+// startKey→endKey の最短経路。endKey=null なら全ノードへの最短距離（dist/prev/reached）を返す全探索。
 function dijkstraRoute(graph, startKey, endKey){
   const {adj}=graph;
   const dist=new Map([[startKey,0]]);
@@ -1018,13 +1052,17 @@ out geom;`;
     return null;
   }
   const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
-  wayEls.forEach(w=>{ w._relId=null; });
+  // 名前一致フラグ: lineNames正規表現にwayのnameが一致するか（名前優先solveの判定に使う）
+  let nameRe=null;
+  try { if(nameRegex) nameRe=new RegExp(nameRegex); } catch(e){}
+  wayEls.forEach(w=>{ w._relId=null; w._nameHit = !!(nameRe && w.tags?.name && nameRe.test(w.tags.name)); });
   const names=[...new Set(wayEls.map(w=>w.tags?.name).filter(Boolean))];
-  log.push({t:'ok', msg:`戦略C(${kinds.join('/')}): ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から way ${wayEls.length}件 (${dt}秒)`});
+  const nHit=wayEls.filter(w=>w._nameHit).length;
+  log.push({t:'ok', msg:`戦略C(${kinds.join('/')}): ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から way ${wayEls.length}件（名前一致${nHit}） (${dt}秒)`});
   log.push({t:'info', msg:`　検索名: ${lineNames.join(' / ')||'(名前指定なし)'}`});
   log.push({t:'info', msg:`　一致way名(${names.length}): ${names.join(' / ')||'(なし)'}`});
   if(wayEls.length===0) return null;
-  return {wayEls, relNames:['(way直接検索)']};
+  return {wayEls, relNames:['(way直接検索)'], nameHitCount:nHit};
 }
 
 async function fetchRailCoords(seg, log){
@@ -1041,51 +1079,97 @@ async function fetchRailCoords(seg, log){
   const directLen = haversine(fromCoord, toCoord);
 
   // 1グラフ分のルート探索（起点ノード→終点ノードの最短経路）
+  // マルチソース/ターゲット: 乗降駅近傍の複数ノードを起点・終点候補にして最良経路を選ぶ。
+  // 1つの最近接ノードに固定スナップして非連結になる問題（例: フェリー往復で別系統wayの
+  // 端点に吸われる）を回避する。
   const solve = (ways, label) => {
     const graph = buildGraph(ways);
-    const s = nearestNodeKey(graph.adj, graph.ways, fromCoord);
-    const e = nearestNodeKey(graph.adj, graph.ways, toCoord);
-    if(!s.key || !e.key){ log.push({t:'warn', msg:`　${label}: スナップできるノードなし`}); return null; }
-    log.push({t:'info', msg:`　${label}: 乗車駅スナップ ${s.dist.toFixed(0)}m / 降車駅スナップ ${e.dist.toFixed(0)}m / ノード数 ${graph.adj.size} / way数 ${graph.ways.length}`});
-    const r = dijkstraRoute(graph, s.key, e.key);
-    if(!r.found){
-      // 経路なし＝非連結。到達範囲内の降車駅最近接ノードまでの経路を復元する。
-      //  ・NEAR_STATION以内 → 従来通り「代替経路」として通常採用
-      //  ・NEAR_STATION超   → 「部分経路」(partial)として返し、呼び出し側で端点→駅を赤点線コネクタ描画（分断デバッグ用）
-      const near = nearestReachable(r.reached, nodeCoordMap(graph.ways), toCoord);
-      if(near && near.key !== s.key){
-        const edges = []; let cur = near.key;
-        while(cur !== s.key){
-          const p = r.prev.get(cur);
-          if(!p) break;
-          edges.unshift(p.edge); cur = p.from;
-        }
-        if(edges.length > 0){
-          const coords = []; const relIds = new Set(); const wayIds = new Set();
-          for(const edge of edges){
-            if(coords.length === 0) coords.push(...edge.coords);
-            else coords.push(...edge.coords.slice(1));
-            if(edge.relId != null) relIds.add(edge.relId);
-            const w = graph.ways[edge.wayIdx]; if(w && w.wayId!=null) wayIds.add(w.wayId);
-          }
-          const routeLen = r.dist.get(near.key) || 0;
-          const isPartial = near.gap > NEAR_STATION;
-          if(isPartial){
-            log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 到達可能な最近接ノード（降車駅まで残り${(near.gap/1000).toFixed(1)}km）まで部分経路を復元`});
-            log.push({t:'info', msg:`　　分断推定位置 [${near.coord[0].toFixed(4)},${near.coord[1].toFixed(4)}] 付近`});
-          } else {
-            log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 最近接到達ノード(${near.gap.toFixed(0)}m手前)で代替経路を復元`});
-          }
-          log.push({t:isPartial?'warn':'ok', msg:`　${label}: ${isPartial?'部分':'代替'}経路 経路長 ${(routeLen/1000).toFixed(1)}km / 区間${edges.length} / relation[${[...relIds].join(',')||'-'}]`});
-          return {coords, startGap:s.dist, endGap:near.gap, routeLen, relIds:[...relIds], wayIdSet:wayIds, isNearFallback:!isPartial, partial:isPartial};
-        }
+    if(!graph.ways.length){ log.push({t:'warn', msg:`　${label}: way無し`}); return null; }
+    // 候補ノード（近傍 SNAP_RADIUS 以内、最低3件）。先頭が最近接。
+    const SNAP_RADIUS = 600; // m。駅構内・複数系統端点を吸収（NEAR_STATION以下）
+    const sCands = nearestNodeKeys(graph.ways, fromCoord, SNAP_RADIUS, 4);
+    const eCands = nearestNodeKeys(graph.ways, toCoord,   SNAP_RADIUS, 4);
+    if(!sCands.length || !eCands.length){ log.push({t:'warn', msg:`　${label}: スナップできるノードなし`}); return null; }
+    const sBest=sCands[0], eBest=eCands[0];
+    const eKeySet = new Set(eCands.map(c=>c.key));
+    const eDistOf = new Map(eCands.map(c=>[c.key,c.dist]));
+
+    // 経路復元ヘルパ（startKey→targetKey）。coords/relIds/wayIds を返す。
+    const build = (r, startKey, targetKey) => {
+      const edges=[]; let cur=targetKey;
+      while(cur!==startKey){ const p=r.prev.get(cur); if(!p) return null; edges.unshift(p.edge); cur=p.from; }
+      if(!edges.length) return null;
+      const coords=[]; const relIds=new Set(); const wayIds=new Set();
+      for(const edge of edges){
+        if(coords.length===0) coords.push(...edge.coords); else coords.push(...edge.coords.slice(1));
+        if(edge.relId!=null) relIds.add(edge.relId);
+        const w=graph.ways[edge.wayIdx]; if(w&&w.wayId!=null) wayIds.add(w.wayId);
       }
-      log.push({t:'warn', msg:`　${label}: 経路なし（起点と終点が非連結・部分経路も復元不可）`});
-      if(near) log.push({t:'info', msg:`　　起点側到達範囲の降車駅最近接 [${near.coord[0].toFixed(4)},${near.coord[1].toFixed(4)}] が降車駅から ${near.gap.toFixed(0)}m（この付近で分断の可能性）`});
-      return null;
+      return {coords, relIds:[...relIds], wayIds, routeLen:r.dist.get(targetKey)||0, hops:edges.length};
+    };
+
+    // 各起点候補からDijkstra。終点候補のいずれかに到達できれば「完全経路」候補とする。
+    // 完全経路が無ければ、各起点の到達範囲から降車駅最近接（部分/代替経路）を集めて最良を採る。
+    let exact=null;     // {startDist, endDist, ...build}
+    let fallbackBest=null; // {startDist, gap, ...build, coord}
+    const ncoord = nodeCoordMap(graph.ways);
+
+    // 高速パス: まず最近接ペア(sBest→eBest)を early-break 付きで探索（大グラフでも速い）。
+    // 両端が十分近く完全到達できれば、これだけで終了し多重探索を回避する。
+    {
+      const r0 = dijkstraRoute(graph, sBest.key, eBest.key);
+      if(r0.found){
+        exact={coords:r0.coords, relIds:r0.relIds, wayIds:r0.wayIds, routeLen:r0.routeLen, hops:r0.hops, startDist:sBest.dist, endDist:eBest.dist};
+      }
     }
-    log.push({t:'ok', msg:`　${label}: 経路発見 経路長 ${(r.routeLen/1000).toFixed(1)}km / 区間${r.hops} / relation[${[...r.relIds].join(',')||'-'}]`});
-    return {coords:r.coords, startGap:s.dist, endGap:e.dist, routeLen:r.routeLen, relIds:[...r.relIds], wayIdSet:r.wayIds, partial:false};
+    const goodEnough = exact && exact.startDist<=NEAR_STATION && exact.endDist<=NEAR_STATION;
+
+    // 多重探索: 高速パスで不十分な時のみ。各起点候補から全探索し最良の完全/部分経路を選ぶ。
+    if(!goodEnough){
+      const tryStart = (sc) => {
+        const r = dijkstraRoute(graph, sc.key, null); // 全探索
+        let bestEndKey=null, bestEndLen=Infinity;
+        for(const ek of eKeySet){
+          if(r.dist.has(ek) && r.dist.get(ek)<bestEndLen){ bestEndLen=r.dist.get(ek); bestEndKey=ek; }
+        }
+        if(bestEndKey){
+          const b=build(r, sc.key, bestEndKey);
+          if(b){
+            const cand={...b, startDist:sc.dist, endDist:eDistOf.get(bestEndKey)};
+            if(!exact || (cand.startDist+cand.endDist) < (exact.startDist+exact.endDist)) exact=cand;
+          }
+        }
+        const near = nearestReachable(r.reached, ncoord, toCoord);
+        if(near && near.key!==sc.key){
+          const b=build(r, sc.key, near.key);
+          if(b){
+            const cand={...b, startDist:sc.dist, gap:near.gap, coord:near.coord};
+            if(!fallbackBest || cand.gap < fallbackBest.gap) fallbackBest=cand;
+          }
+        }
+      };
+      for(const sc of sCands) tryStart(sc);
+    }
+
+    log.push({t:'info', msg:`　${label}: 乗車駅最近接 ${sBest.dist.toFixed(0)}m / 降車駅最近接 ${eBest.dist.toFixed(0)}m / 起点候補${sCands.length}・終点候補${eCands.length} / ノード数 ${graph.adj.size} / way数 ${graph.ways.length}`});
+
+    if(exact){
+      log.push({t:'ok', msg:`　${label}: 経路発見 経路長 ${(exact.routeLen/1000).toFixed(1)}km / 区間${exact.hops} / relation[${exact.relIds.join(',')||'-'}]`});
+      return {coords:exact.coords, startGap:exact.startDist, endGap:exact.endDist, routeLen:exact.routeLen, relIds:exact.relIds, wayIdSet:exact.wayIds, partial:false};
+    }
+    if(fallbackBest){
+      const isPartial = fallbackBest.gap > NEAR_STATION;
+      if(isPartial){
+        log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 到達可能な最近接ノード（降車駅まで残り${(fallbackBest.gap/1000).toFixed(1)}km）まで部分経路を復元`});
+        log.push({t:'info', msg:`　　分断推定位置 [${fallbackBest.coord[0].toFixed(4)},${fallbackBest.coord[1].toFixed(4)}] 付近`});
+      } else {
+        log.push({t:'warn', msg:`　${label}: 経路なし（非連結）→ 最近接到達ノード(${fallbackBest.gap.toFixed(0)}m手前)で代替経路を復元`});
+      }
+      log.push({t:isPartial?'warn':'ok', msg:`　${label}: ${isPartial?'部分':'代替'}経路 経路長 ${(fallbackBest.routeLen/1000).toFixed(1)}km / 区間${fallbackBest.hops} / relation[${fallbackBest.relIds.join(',')||'-'}]`});
+      return {coords:fallbackBest.coords, startGap:fallbackBest.startDist, endGap:fallbackBest.gap, routeLen:fallbackBest.routeLen, relIds:fallbackBest.relIds, wayIdSet:fallbackBest.wayIds, isNearFallback:!isPartial, partial:isPartial};
+    }
+    log.push({t:'warn', msg:`　${label}: 経路なし（起点と終点が非連結・部分経路も復元不可）`});
+    return null;
   };
 
   // ---- 戦略C: フェリー/ケーブル/ロープウェイ ----
@@ -1095,12 +1179,29 @@ async function fetchRailCoords(seg, log){
   if(wqKinds.length){
     log.push({t:'info', msg:`戦略C対象（${wqKinds.join('/')}）${seg.wayQuery?'：wayQuery指定':'：type/名称から自動判定'}`});
     const resC = await strategyByWayName(seg, bbox, log, wqKinds);
-    const rC = (resC && resC.wayEls.length) ? solve(resC.wayEls, '戦略C') : null;
-    if(!rC || rC.coords.length<2){
+    if(!resC || !resC.wayEls.length){
+      log.push({t:'err', msg:'戦略C: way取得できず → fallback採用'});
+      return null;
+    }
+    // 名前一致wayがあれば、まずそれだけで解く（無関係なフェリー/索道wayの混入で
+    // 起点が遠いwayに吸われるのを防ぐ）。不十分なら全wayで再探索。
+    let rC=null;
+    const nameHitWays = resC.wayEls.filter(w=>w._nameHit);
+    if(nameHitWays.length){
+      rC = solve(nameHitWays, '戦略C(名前一致)');
+      if(rC && !rC.partial && rC.startGap<=NEAR_STATION && rC.endGap<=NEAR_STATION){
+        return finalize(rC);
+      }
+      log.push({t:'info', msg:`　戦略C: 名前一致wayのみでは不十分（${rC?`始${rC.startGap.toFixed(0)}m/終${rC.endGap.toFixed(0)}m`:'経路なし'}）→ 全wayで再探索`});
+    }
+    const rAll = solve(resC.wayEls, '戦略C(全way)');
+    // 名前一致結果と全way結果のうち、終点ギャップが小さい方を採用
+    const pick = (!rC) ? rAll : (!rAll ? rC : (rAll.endGap < rC.endGap ? rAll : rC));
+    if(!pick || pick.coords.length<2){
       log.push({t:'err', msg:'戦略C: 有効な経路を構築できず → fallback採用'});
       return null;
     }
-    return finalize(rC);
+    return finalize(pick);
   }
 
   // ---- キャッシュ専用高速パス ----
