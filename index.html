@@ -28,6 +28,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .day-label .dl-text{flex:1;cursor:pointer;}
 #ph-all{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#555;cursor:pointer;}
 #ph-all input{cursor:pointer;margin:0;}
+#ph-controls{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px;}
+#ph-controls label{display:flex;align-items:center;gap:6px;font-size:11px;color:#555;cursor:pointer;}
+#ph-controls input{cursor:pointer;margin:0;}
+#ph-dotonly{color:#c0392b;font-weight:600;}
+#dot-jump{margin-top:8px;}
+#dot-jump.empty{display:none;}
+.dj-head{font-size:11px;font-weight:700;color:#c0392b;margin-bottom:4px;}
+.dj-item{display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;border-radius:5px;cursor:pointer;border:1px solid #f0d0c8;background:#fff7f5;margin-bottom:3px;}
+.dj-item:hover{background:#ffe9e3;}
+.dj-icon{flex-shrink:0;}
+.dj-name{flex:1;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dj-gap{color:#c0392b;font-size:10px;flex-shrink:0;}
+.dj-day{color:#999;font-size:10px;flex-shrink:0;}
 .seg-row{padding:5px 30px 5px 16px;cursor:pointer;border-top:1px solid #f0f0f0;position:relative;}
 .seg-row:hover{background:#f5f5f0;}
 .seg-row.active{background:#eef4ff;outline:2px solid #4477cc;outline-offset:-2px;}
@@ -138,7 +151,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <div id="main">
   <div id="map"></div>
   <div id="panel">
-    <div id="ph"><h2>全行程</h2><p>クリックで地図ズーム・詳細を表示</p><label id="ph-all"><input type="checkbox" id="chk-all-days" checked onchange="toggleAllDays(this.checked)">全日表示</label></div>
+    <div id="ph">
+      <h2>全行程</h2><p>クリックで地図ズーム・詳細を表示</p>
+      <div id="ph-controls">
+        <label id="ph-all"><input type="checkbox" id="chk-all-days" checked onchange="toggleAllDays(this.checked)">全日表示</label>
+        <label id="ph-dotonly"><input type="checkbox" id="chk-dot-only" onchange="toggleDotOnly(this.checked)">未達/直線のみ</label>
+      </div>
+      <div id="dot-jump"></div>
+    </div>
     <div id="panel-body"></div>
   </div>
   <div id="det">
@@ -175,7 +195,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0613-1
+// rail_trip_map 0613-2
+//  ★0613-2: ①フェリー・ケーブルカー対応（戦略C）: route=ferry / railway=funicular のwayは
+//      単独way主体で、relation検索(戦略A)では拾えない。seg.wayQuery（"ferry"|"funicular"）が
+//      指定された区間は、way[route=ferry|railway=funicular][name~lineNames](bbox); out geom; で
+//      wayを直接取得→Dijkstra（戦略C）。既存の戦略A/B 2段階フローには非干渉。
+//      また戦略A/BのStep2 railwayフィルタに funicular を追加（rel配下のfunicular wayも拾う）。
+//    ②点線区間ジャンプ: パネル上部に「⚠ 未発見/部分(🔶)区間」リストを表示。クリックでズーム。
+//      ロード完了時に自動生成。点線（fallback/部分描画）箇所を素早く発見できる。
+//    ③「未達/直線のみ表示」トグル: OSM成功線(🗺)を一括非表示にし、点線（🔶部分描画＋⚠直線）
+//      だけを地図に残す。日別表示とは独立のフィルタ（両者AND）。
+//  （旧: 0613-1）
+//  ★0613-1: ①日別表示チェックボックス ②経由駅via対応 ③キャッシュ専用高速パス(200m)
+//    ④不達区間の部分描画(赤点線コネクタ) ⑤大型relation間引き保存 ⑥退避時の採用relation保護
+//  ★0611-1
 //  ★0613-1: ①日別表示チェックボックス: パネルの日ラベルにON/OFF、パネル上部に「全日表示」一括。
 //      地図上の線（OSM/fallback/接続線）を日単位で表示切替（ロード進行中の切替にも追従）。
 //    ②経由駅 via 対応: seg.via = [["駅名", lat, lon, "路線名候補1", ...], ...]。
@@ -266,6 +299,7 @@ const T = {
   tokkyu:{label:'特急・在来線',color:'#185FA5',dash:'4,3',w:3},
   local:{label:'ローカル線',color:'#854F0B',dash:'6,4',w:3},
   ferry:{label:'船・フェリー',color:'#0F6E56',dash:'4,4',w:3},
+  cable:{label:'ケーブル・ロープウェイ',color:'#B7791F',dash:'2,3',w:3},
   bus:{label:'バス・路面電車',color:'#4a9922',dash:'4,3',w:2},
   taxi:{label:'タクシー',color:'#888780',dash:'3,4',w:2},
   plane:{label:'飛行機',color:'#3C3489',dash:'2,6',w:4},
@@ -283,6 +317,7 @@ const SESSION_REL_GEOM = new Map(); // relId→ways: このページセッショ
 const SESSION_FETCHED = new Set();  // このセッションでAPIから取得したrelId（採用時にlocalStorageへ書く対象）
 const LOG = {}; // key -> ログオブジェクト
 const DAY_VISIBLE = {}; // di -> bool（日別表示。未定義はtrue扱い）
+let DOT_ONLY = false;   // 「未達/直線のみ表示」フィルタ
 
 // =====================================================================
 // ファイル読み込み
@@ -747,7 +782,7 @@ function calcBbox(seg){
 async function fetchRelGeomNoCache(rid, log){
   const q=`[out:json][timeout:25];
 relation(id:${rid});
-way(r)["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"];
+way(r)["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway|funicular"];
 out geom;`;
   const r = await fetchOverpass(q, log, {noCache:true});
   if(!r.data?.elements) return {ways:null, endpoint:r.endpoint};
@@ -891,7 +926,7 @@ async function strategyByArea(seg, bbox, log){
   const q=`[out:json][timeout:40];
 relation["route"~"train|railway|monorail|high_speed"]["name"~"新幹線|Shinkansen"](${S},${W},${N},${E})->.shin;
 way(r.shin)->.shinways;
-( way["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway"](${S},${W},${N},${E}); - .shinways; );
+( way["railway"~"rail|narrow_gauge|tram|light_rail|monorail|subway|funicular"](${S},${W},${N},${E}); - .shinways; );
 out geom;`;
   const t0=performance.now();
   const {data, cached, endpoint}=await fetchOverpass(q, log);
@@ -906,6 +941,52 @@ out geom;`;
   log.push({t:'info', msg:`　エリア内way数: ${wayEls.length}`});
   if(wayEls.length===0) return null;
   return {wayEls, relNames:['(エリア検索)']};
+}
+
+// 戦略C: フェリー(route=ferry)・ケーブルカー(railway=funicular)を way名で直接取得。
+//  これらは単独way主体でrelation検索(戦略A)では拾えないため、name一致のwayを1クエリで取得する。
+//  seg.wayQuery: "ferry" | "funicular"（複数は配列も可）。lineNames でway名を絞り込む。
+//  発着駅±0.02°のunion bbox（フェリーは航路が長いので戦略Aより広め）。
+async function strategyByWayName(seg, bbox, log){
+  const kinds = Array.isArray(seg.wayQuery) ? seg.wayQuery : [seg.wayQuery];
+  const lineNames = seg.lineNames || (seg.lineName?[seg.lineName]:[]);
+  const dep = seg.fallback?.[0], arr = seg.fallback?.[seg.fallback.length-1];
+  if(!dep || !arr){ log.push({t:'err', msg:'戦略C: 始終点座標なし'}); return null; }
+  const delta = 0.02; // ±0.02°≈2.2km（航路・索道は駅間が空くので広め）
+  const fmt = v => v.toFixed(5);
+  const boxOf = pt => `${fmt(pt[0]-delta)},${fmt(pt[1]-delta)},${fmt(pt[0]+delta)},${fmt(pt[1]+delta)}`;
+  const isSamePoint = dep[0]===arr[0] && dep[1]===arr[1];
+  const boxes = isSamePoint ? [dep] : [dep, arr];
+  // tag条件: ferry→["route"="ferry"], funicular→["railway"="funicular"]
+  const tagCond = k => k==='ferry' ? `["route"="ferry"]` : k==='funicular' ? `["railway"="funicular"]` : null;
+  const nameCond = lineNames.length ? `["name"~"${lineNames.map(escapeRegex).join('|')}"]` : '';
+  const parts = [];
+  for(const k of kinds){
+    const tc = tagCond(k);
+    if(!tc){ log.push({t:'warn', msg:`戦略C: 未知のwayQuery「${k}」をスキップ`}); continue; }
+    for(const b of boxes) parts.push(`  way${tc}${nameCond}(${boxOf(b)});`);
+  }
+  if(!parts.length) return null;
+  const q=`[out:json][timeout:15];
+(
+${parts.join('\n')}
+);
+out geom;`;
+  const t0=performance.now();
+  const {data, cached, endpoint}=await fetchOverpass(q, log);
+  const dt=((performance.now()-t0)/1000).toFixed(1);
+  if(!data?.elements){
+    log.push({t:'err', msg:`戦略C(${kinds.join('/')}): データ取得失敗 (${dt}秒)`});
+    return null;
+  }
+  const wayEls=data.elements.filter(e=>e.type==='way'&&e.geometry?.length>=2);
+  wayEls.forEach(w=>{ w._relId=null; });
+  const names=[...new Set(wayEls.map(w=>w.tags?.name).filter(Boolean))];
+  log.push({t:'ok', msg:`戦略C(${kinds.join('/')}): ${cached?'キャッシュ':'API'+(endpoint?'('+endpoint+')':'')}から way ${wayEls.length}件 (${dt}秒)`});
+  log.push({t:'info', msg:`　検索名: ${lineNames.join(' / ')||'(名前指定なし)'}`});
+  log.push({t:'info', msg:`　一致way名(${names.length}): ${names.join(' / ')||'(なし)'}`});
+  if(wayEls.length===0) return null;
+  return {wayEls, relNames:['(way直接検索)']};
 }
 
 async function fetchRailCoords(seg, log){
@@ -968,6 +1049,18 @@ async function fetchRailCoords(seg, log){
     log.push({t:'ok', msg:`　${label}: 経路発見 経路長 ${(r.routeLen/1000).toFixed(1)}km / 区間${r.hops} / relation[${[...r.relIds].join(',')||'-'}]`});
     return {coords:r.coords, startGap:s.dist, endGap:e.dist, routeLen:r.routeLen, relIds:[...r.relIds], wayIdSet:r.wayIds, partial:false};
   };
+
+  // ---- 戦略C: フェリー/ケーブルカー（wayQuery指定区間） ----
+  // これらは単独way主体でrelation検索に乗らないため、専用ルートで処理し戦略A/B/高速パスはスキップ。
+  if(seg.wayQuery){
+    const resC = await strategyByWayName(seg, bbox, log);
+    const rC = (resC && resC.wayEls.length) ? solve(resC.wayEls, '戦略C') : null;
+    if(!rC || rC.coords.length<2){
+      log.push({t:'err', msg:'戦略C: 有効な経路を構築できず → fallback採用'});
+      return null;
+    }
+    return finalize(rC);
+  }
 
   // ---- キャッシュ専用高速パス ----
   // 前回採用relation(osmseg_)が全てキャッシュ（セッション/relcache・部分キャッシュ可）に揃っていれば、
@@ -1079,7 +1172,7 @@ async function fetchRailCoords(seg, log){
     log.push({t:'info', msg:`　採用relation [${uniq.join(',')||'-'}]（${uniq.length}本）`});
     const ep1=b.coords[0], ep2=b.coords[b.coords.length-1];
     log.push({t:'info', msg:`描画端点1 [${ep1[0].toFixed(4)},${ep1[1].toFixed(4)}] / 端点2 [${ep2[0].toFixed(4)},${ep2[1].toFixed(4)}]`});
-    return {coords:b.coords, connectors, partial:isPartial};
+    return {coords:b.coords, connectors, partial:isPartial, startGap:b.startGap, endGap:b.endGap};
   }
 }
 
@@ -1114,15 +1207,31 @@ function setLayerVisible(layer,on){
   if(on){ if(!map.hasLayer(layer)) layer.addTo(map); }
   else { if(map.hasLayer(layer)) map.removeLayer(layer); }
 }
-// 日別表示切替（ロード進行中でもplMapに入っている分は即反映、以後の追加分はputで考慮）
+// この区間が「未達/直線のみ」フィルタを通過するか（OSM完全成功🗺はDOT_ONLY時に隠す）
+function isDotSeg(key){
+  const lg=LOG[key];
+  if(!lg) return true;                        // 未判定（ロード中）は隠さない
+  if(lg.result==='osm' && !lg.partial) return false; // 🗺 完全成功 → 隠す対象
+  return true;                                // 🔶部分・⚠fallback・➖skip・error は残す
+}
+// 区間の最終的な表示可否（日別ON かつ （DOT_ONLY無効 または 点線区間））
+function segShouldShow(seg){
+  const key=`${seg.di}-${seg.si}`;
+  return dayVisible(seg.di) && (!DOT_ONLY || isDotSeg(key));
+}
+// 1区間のレイヤ表示を現在の設定に同期
+function syncSegVisibility(seg){
+  const ent=plMap[`${seg.di}-${seg.si}`]; if(!ent) return;
+  const on=segShouldShow(seg);
+  setLayerVisible(ent.osm,on); setLayerVisible(ent.fallback,on);
+  (ent.conn||[]).forEach(c=>setLayerVisible(c,on));
+}
+function syncAllVisibility(){ for(const seg of SEGS) syncSegVisibility(seg); }
+
+// 日別表示切替（ロード進行中でもplMapに入っている分は即反映）
 function toggleDay(di,on){
   DAY_VISIBLE[di]=on;
-  for(const seg of SEGS){
-    if(seg.di!==di) continue;
-    const ent=plMap[`${seg.di}-${seg.si}`]; if(!ent) continue;
-    setLayerVisible(ent.osm,on); setLayerVisible(ent.fallback,on);
-    (ent.conn||[]).forEach(c=>setLayerVisible(c,on));
-  }
+  for(const seg of SEGS){ if(seg.di===di) syncSegVisibility(seg); }
   const all=document.getElementById('chk-all-days');
   if(all){
     const dis=[...new Set(SEGS.map(s=>s.di))];
@@ -1135,11 +1244,12 @@ function toggleAllDays(on){
     DAY_VISIBLE[d]=on;
     const chk=document.getElementById(`chk-day-${d}`); if(chk) chk.checked=on;
   }
-  for(const seg of SEGS){
-    const ent=plMap[`${seg.di}-${seg.si}`]; if(!ent) continue;
-    setLayerVisible(ent.osm,on); setLayerVisible(ent.fallback,on);
-    (ent.conn||[]).forEach(c=>setLayerVisible(c,on));
-  }
+  syncAllVisibility();
+}
+// 「未達/直線のみ表示」トグル: OSM完全成功線を隠し、点線（部分描画・直線）だけ残す
+function toggleDotOnly(on){
+  DOT_ONLY=on;
+  syncAllVisibility();
 }
 // 未達側コネクタ（経路端点→駅の赤点線。採用way・分断箇所の目視デバッグ用）
 function makeConnector(c){
@@ -1150,8 +1260,8 @@ function putFallback(seg){
   const key=`${seg.di}-${seg.si}`;
   if(plMap[key]?.osm||plMap[key]?.fallback) return;
   const pl=makePl(seg.fallback,seg);
-  if(dayVisible(seg.di)) pl.addTo(map);
   plMap[key]={fallback:pl};
+  if(segShouldShow(seg)) pl.addTo(map);
 }
 function putOsm(seg,coords,connectors){
   const key=`${seg.di}-${seg.si}`;
@@ -1161,8 +1271,8 @@ function putOsm(seg,coords,connectors){
   if(e.conn)e.conn.forEach(c=>map.removeLayer(c));
   const pl=makePl(coords,seg);
   const conn=(connectors||[]).map(makeConnector);
-  if(dayVisible(seg.di)){ pl.addTo(map); conn.forEach(c=>c.addTo(map)); }
   plMap[key]={osm:pl, conn};
+  if(segShouldShow(seg)){ pl.addTo(map); conn.forEach(c=>c.addTo(map)); }
 }
 function getActivePl(di,si){ const e=plMap[`${di}-${si}`]; return e?.osm||e?.fallback||null; }
 
@@ -1248,6 +1358,48 @@ function buildLegend(){
   const ln=document.createElement('div'); ln.className='leg-line';
   ln.style.cssText='background:repeating-linear-gradient(90deg,#d00000 0 3px,transparent 3px 7px);';
   el.appendChild(ln); el.appendChild(document.createTextNode('未達コネクタ')); lg.appendChild(el);
+}
+
+// 点線（未発見⚠ / 部分描画🔶）区間のジャンプリストをパネル上部に生成。
+// ➖skip（意図的にAPI取得しない区間）は「発見失敗」ではないので除外。
+function buildDotJump(){
+  const box=document.getElementById('dot-jump');
+  if(!box) return;
+  box.innerHTML='';
+  const items=[];
+  for(const seg of SEGS){
+    const key=`${seg.di}-${seg.si}`;
+    const lg=LOG[key]; if(!lg) continue;
+    const isPartial = lg.result==='osm' && lg.partial;
+    const isFallback = lg.result==='fallback' || lg.result==='error';
+    if(!isPartial && !isFallback) continue;
+    items.push({seg, key, lg, isPartial});
+  }
+  if(!items.length){ box.classList.add('empty'); return; }
+  box.classList.remove('empty');
+  const head=document.createElement('div'); head.className='dj-head';
+  head.textContent=`⚠ 未発見/部分の区間（${items.length}）— クリックでズーム`;
+  box.appendChild(head);
+  for(const {seg, key, lg, isPartial} of items){
+    const it=document.createElement('div'); it.className='dj-item';
+    const ic=document.createElement('span'); ic.className='dj-icon'; ic.textContent=isPartial?'🔶':'⚠';
+    const nm=document.createElement('span'); nm.className='dj-name'; nm.textContent=seg.name;
+    const dy=document.createElement('span'); dy.className='dj-day'; dy.textContent=`${seg.di+1}日目`;
+    it.appendChild(ic); it.appendChild(nm);
+    // 部分描画はギャップ距離（残り）を表示
+    if(isPartial && lg.endGap!=null){
+      const gp=document.createElement('span'); gp.className='dj-gap';
+      gp.textContent = lg.endGap>=1000 ? `残${(lg.endGap/1000).toFixed(1)}km` : `残${Math.round(lg.endGap)}m`;
+      it.appendChild(gp);
+    }
+    it.appendChild(dy);
+    it.onclick=()=>{
+      // 非表示中でも飛べるよう、その日を表示ONにしてからズーム
+      if(!dayVisible(seg.di)){ const c=document.getElementById(`chk-day-${seg.di}`); if(c){c.checked=true;} toggleDay(seg.di,true); }
+      selectSeg(seg.di,seg.si);
+    };
+    box.appendChild(it);
+  }
 }
 
 // =====================================================================
@@ -1352,6 +1504,7 @@ async function loadAll(){
     await loadOneSeg(seg);
   }
   document.getElementById('status-text').textContent='✅ 読み込み完了';
+  buildDotJump();
   const allPls=Object.values(plMap).map(e=>e.osm||e.fallback).filter(Boolean);
   if(allPls.length>0){ try{ map.fitBounds(L.featureGroup(allPls).getBounds(),{padding:[20,20]}); }catch(e){} }
 }
@@ -1379,6 +1532,8 @@ async function loadOneSeg(seg){
       putOsm(seg,res.coords,res.connectors);
       result='osm';
       LOG[key].partial = !!res.partial;
+      LOG[key].endGap = res.endGap;
+      LOG[key].startGap = res.startGap;
       if(res.partial){
         log.push({t:'warn', msg:'→ 部分経路＋赤点線コネクタで描画（経路未達・分断デバッグ用）'});
         if(icon)icon.textContent='🔶';
