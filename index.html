@@ -210,7 +210,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0613-6
+// rail_trip_map 0613-7
+//  ★0613-7: ①戦略C/D（フェリー・ケーブル・索道・バス）でも採用relationをキャッシュ保存。
+//      従来は早期returnで保存処理を通らず、毎回フル取得（高野山ケーブル34秒・石崎汽船24秒）。
+//      saveAdoptedRels を共通関数化し戦略A/B/C/Dすべてで呼ぶ。
+//    ②戦略C専用 way直接キャッシュ（osmway_）を新設。フェリー/索道は単独way（relationなし）で
+//      relcacheに乗らず、osm_クエリキャッシュは容量退避で消える（今回退避48件→osm_5件のみ残存）。
+//      区間署名をキーにwayを専用名前空間へ保存。osmway_はlsSetSmartの退避対象に含めない＝残る。
+//      次回は戦略Cがway直接キャッシュHITでAPI不要に。
+//    ③cacheStats/clearCacheにosmway_を反映。
+//  注記: 御堂筋線「天王寺→なんば」未達は、なんば座標±949mまでwayが届かない＝OSM側のway分断が原因
+//      （buildGraphは端点クラスタリングなのでway並び順には非依存。ソート順は要因ではない）。
+//  （旧: 0613-6）
+//  ★0613-6: via区間のキャッシュ完全保存（高速パスでvia経路再現）
+//  ★0613-5: ログ秒数+合計 / 未達リスト逐次 / via経由優先 / route=bus(戦略D) / 詳細下半分
+//  ★0613-1〜3: 日別表示 / via / 高速パス / 部分描画 / 間引き保存 / 戦略C / 点線ジャンプ等
+//  ★0611-1
 //  ★0613-6: ①via区間のキャッシュ保存を完全版に（高速パスでvia経路を再現可能化）。
 //      原因: 大型relationの間引き保存(採用wayのみ)が、via区間ではレグ境界(経由駅)の連結に
 //      必要なwayを落とし、高速パスのレグ連結が断絶→毎回フル再取得(数十秒)になっていた。
@@ -507,15 +522,16 @@ function totalTimeStr(){
 }
 
 function cacheStats(){
-  let q={n:0,c:0}, r={n:0,c:0}, g={n:0,c:0};
+  let q={n:0,c:0}, r={n:0,c:0}, g={n:0,c:0}, w={n:0,c:0};
   for(let i=0;i<localStorage.length;i++){
     const k=localStorage.key(i); const v=localStorage.getItem(k)||'';
     if(k.startsWith('osmrel_')){r.n++;r.c+=v.length;}
     else if(k.startsWith('osmseg_')){g.n++;g.c+=v.length;}
+    else if(k.startsWith('osmway_')){w.n++;w.c+=v.length;}
     else if(k.startsWith('osm_')){q.n++;q.c+=v.length;}
   }
   const mb=x=>(x*2/1048576).toFixed(2); // JS文字列はUTF-16≒2byte/char換算
-  return `キャッシュ統計: クエリosm_ ${q.n}件 ${mb(q.c)}MB ／ relation osmrel_ ${r.n}件 ${mb(r.c)}MB ／ 採用リストosmseg_ ${g.n}件 ${mb(g.c)}MB ／ 今回退避 ${EVICTED}件`;
+  return `キャッシュ統計: クエリosm_ ${q.n}件 ${mb(q.c)}MB ／ relation osmrel_ ${r.n}件 ${mb(r.c)}MB ／ way直接osmway_ ${w.n}件 ${mb(w.c)}MB ／ 採用リストosmseg_ ${g.n}件 ${mb(g.c)}MB ／ 今回退避 ${EVICTED}件`;
 }
 function cacheKey(q){ return "osm_" + btoa(unescape(encodeURIComponent(q))); }
 function cacheGet(q){
@@ -553,6 +569,35 @@ function relCacheIsPartial(relId){
     if(Date.now()-obj.ts > CACHE_TTL) return false;
     return !!obj.p;
   } catch(e){ return false; }
+}
+
+// 戦略C（フェリー/ケーブル/索道）専用 way直接キャッシュ。
+//  これらは単独way主体でrelation idを持たないことが多く、relcache(osmrel_)に乗らない。
+//  またosm_クエリキャッシュは容量退避で消えやすい。そこで区間署名(lineNames+発着+wayQuery)を
+//  キーに、取得wayのslim版を専用名前空間(osmway_)へ保存する。osmway_はlsSetSmartの退避対象に
+//  含めない（=osm_/osmrel_を先に退避）ので残りやすい。
+function wayCacheKey(seg){
+  const lns=(seg.lineNames||(seg.lineName?[seg.lineName]:[])).join('|');
+  const dep=seg.fallback?.[0]||[], arr=seg.fallback?.[seg.fallback.length-1]||[];
+  const wq=(Array.isArray(seg.wayQuery)?seg.wayQuery.join(','):(seg.wayQuery||resolveWayQuery(seg).join(',')));
+  const sig=lns+'@'+dep.join(',')+'>'+arr.join(',')+'#'+wq;
+  return "osmway_"+btoa(unescape(encodeURIComponent(sig)));
+}
+function wayCacheGet(seg){
+  try{
+    const raw=localStorage.getItem(wayCacheKey(seg));
+    if(!raw) return null;
+    const obj=JSON.parse(raw);
+    if(Date.now()-obj.ts>CACHE_TTL){ localStorage.removeItem(wayCacheKey(seg)); return null; }
+    return obj.ways; // [{id, geometry:[{lat,lon}], name}]
+  }catch(e){ return null; }
+}
+function wayCacheSet(seg, wayEls){
+  try{
+    const slim=wayEls.map(w=>({id:w.id, name:(w.tags&&w.tags.name)||null,
+      geometry:w.geometry.map(g=>({lat:+(+g.lat).toFixed(5), lon:+(+g.lon).toFixed(5)}))}));
+    lsSetSmart(wayCacheKey(seg), JSON.stringify({ts:Date.now(), ways:slim}), ["osm_","osmrel_"]);
+  }catch(e){}
 }
 // usedWayIdSet: 採用経路で実際に使ったwayのidセット。
 // way数>LARGE_REL_WAYS のrelationは該当wayだけを間引き保存(p:1)し、既存の間引きエントリとway id単位でマージ蓄積
@@ -609,7 +654,7 @@ function segRelsSet(seg, rels){
   } catch(e){}
 }
 function clearCache(){
-  const ks = Object.keys(localStorage).filter(k=>/^osm(_|rel_|seg_)/.test(k));
+  const ks = Object.keys(localStorage).filter(k=>/^osm(_|rel_|seg_|way_)/.test(k));
   ks.forEach(k=>localStorage.removeItem(k));
   alert(`キャッシュを${ks.length}件削除しました。リロードで再取得します。`);
 }
@@ -1071,6 +1116,17 @@ async function strategyByWayName(seg, bbox, log, kinds){
     }
   }
   if(!parts.length){ log.push({t:'warn', msg:'戦略C: 対象種別なし（resolveWayQueryが空）'}); return null; }
+
+  // まずway直接キャッシュ（osmway_）を確認（osm_クエリキャッシュより退避されにくい）
+  const cachedWays = wayCacheGet(seg);
+  if(cachedWays && cachedWays.length){
+    const wayEls = cachedWays.map(w=>({id:w.id, geometry:w.geometry, tags:w.name?{name:w.name}:{}, _relId:null}));
+    const names=[...new Set(cachedWays.map(w=>w.name).filter(Boolean))];
+    log.push({t:'ok', msg:`戦略C(${kinds.join('/')}): way直接キャッシュHIT way ${wayEls.length}件`});
+    log.push({t:'info', msg:`　一致way名(${names.length}): ${names.join(' / ')||'(なし)'}`});
+    return {wayEls, relNames:['(way直接キャッシュ)']};
+  }
+
   const q=`[out:json][timeout:15];
 (
 ${parts.join('\n')}
@@ -1090,6 +1146,8 @@ out geom;`;
   log.push({t:'info', msg:`　検索名: ${lineNames.join(' / ')||'(名前指定なし)'}`});
   log.push({t:'info', msg:`　一致way名(${names.length}): ${names.join(' / ')||'(なし)'}`});
   if(wayEls.length===0) return null;
+  // way直接キャッシュに保存（次回はこのwayでDijkstra＝API不要）
+  wayCacheSet(seg, wayEls);
   return {wayEls, relNames:['(way直接検索)']};
 }
 
@@ -1271,6 +1329,7 @@ async function fetchRailCoords(seg, log){
       log.push({t:'err', msg:'戦略D(bus): 有効な経路を構築できず → fallback採用'});
       return null;
     }
+    saveAdoptedRels(rD);
     return finalize(rD);
   }
 
@@ -1286,6 +1345,7 @@ async function fetchRailCoords(seg, log){
       log.push({t:'err', msg:'戦略C: 有効な経路を構築できず → fallback採用'});
       return null;
     }
+    saveAdoptedRels(rC);
     return finalize(rC);
   }
 
@@ -1373,19 +1433,21 @@ async function fetchRailCoords(seg, log){
     }
   }
 
-  // 採用relationだけをキャッシュ保存（容量節約）。両端とも駅へ十分到達できた結果のみ対象
-  // （部分経路・始点側大ズレを保存すると高速パスが誤経路を再生するため除外）。
-  // このセッションでAPI取得した分のみ書く（永続化成功でSESSION_FETCHEDから外す＝以後の区間で再書込しない）。
-  // 大型relation（way数>LARGE_REL_WAYS）は採用経路のwayだけ間引き保存。
-  //  ただしvia区間は間引きすると高速パスでレグ境界（経由駅）が繋がらず経路再現に失敗するため、
-  //  完全保存する（usedWayIdSet=null を渡すと relCacheSet は間引きしない）。
-  if(result && result.relIds && result.relIds.length && !result.partial
-     && result.startGap <= NEAR_STATION && result.endGap <= NEAR_STATION){
+  // 採用relationをキャッシュ保存する共通処理（戦略A/B/C/D 共用）。
+  //  - 両端とも駅へ十分到達（NEAR_STATION以内）かつ部分経路でない結果のみ保存。
+  //  - このセッションでAPI取得した分のみ書く（SESSION_FETCHEDで管理）。
+  //  - 大型relationは採用wayのみ間引き保存。ただしvia区間は完全保存（レグ連結のため）。
+  //  - relIdを持つ採用relation（戦略A/B/D）はrelcache＋segRelsに記録。
+  //    戦略Cのフェリー/索道は単独way（relIdなし）が多く、その場合はsegRelsに残せないが、
+  //    SESSION内で取得済みなら次回もセッションキャッシュ/relcacheに載る。
+  function saveAdoptedRels(result){
+    if(!(result && result.relIds && result.relIds.length && !result.partial
+         && result.startGap <= NEAR_STATION && result.endGap <= NEAR_STATION)) return;
     const hasVia = parseVia(seg).length > 0;
     let wrote=0; const thinned=[];
     for(const rid of result.relIds){
+      if(rid==null) continue;
       if(SESSION_FETCHED.has(rid) && SESSION_REL_GEOM.has(rid)){
-        // via区間は間引きしない（完全保存）。それ以外は従来通り採用wayのみ間引き。
         const rr = relCacheSet(rid, SESSION_REL_GEOM.get(rid), hasVia ? null : result.wayIdSet);
         if(rr.ok){
           wrote++; SESSION_FETCHED.delete(rid);
@@ -1393,8 +1455,9 @@ async function fetchRailCoords(seg, log){
         }
       }
     }
-    segRelsSet(seg, result.relIds);
-    log.push({t:'info', msg:`　採用relationをキャッシュ保存（新規${wrote}件 / 採用計${result.relIds.length}件${hasVia?'・via区間のため完全保存':''}${thinned.length?` / 間引き ${thinned.join(', ')}`:''}）`});
+    const relIdsForSeg = result.relIds.filter(r=>r!=null);
+    if(relIdsForSeg.length) segRelsSet(seg, relIdsForSeg);
+    log.push({t:'info', msg:`　採用relationをキャッシュ保存（新規${wrote}件 / 採用計${relIdsForSeg.length}件${hasVia?'・via区間のため完全保存':''}${thinned.length?` / 間引き ${thinned.join(', ')}`:''}）`});
   }
 
   if(!result || result.coords.length<2){
@@ -1402,6 +1465,7 @@ async function fetchRailCoords(seg, log){
     return null;
   }
 
+  saveAdoptedRels(result);
   return finalize(result);
 
   // ---- 採用結果の共通仕上げ: ログ出力＋未達側の赤点線コネクタ計算 ----
