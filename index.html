@@ -122,7 +122,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .cal-node-name{font-size:12px;font-weight:600;color:#1a1a1a;}
 .cal-node-tag{font-size:10px;color:#0f7a37;font-weight:600;}
 .cal-node.start .cal-node-tag{color:#333;}
-.cal-edge{position:relative;margin:3px 0 3px -2px;padding:6px 9px;border-radius:6px;cursor:pointer;border-left:4px solid #999;background:#f2f2f4;transition:filter .12s;display:flex;flex-direction:column;justify-content:center;}
+.cal-edge{position:relative;margin:2px 0 2px -2px;padding:3px 9px;border-radius:5px;cursor:pointer;border-left:4px solid #999;background:#f2f2f4;transition:filter .12s;display:flex;flex-direction:column;justify-content:center;}
 .cal-edge:hover{filter:brightness(0.96);}
 .cal-edge-name{font-size:11px;font-weight:700;line-height:1.35;}
 .cal-edge-note{font-size:10px;margin-top:2px;line-height:1.4;color:#c0392b;font-weight:600;}
@@ -164,7 +164,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
     <div id="loader-opts" style="margin-top:14px;text-align:left;font-size:13px;line-height:1.95;">
       <label style="display:block;cursor:pointer;"><input type="checkbox" id="opt-stratb" checked style="vertical-align:middle;margin-right:6px;">戦略B（エリア検索のフォールバック）を使う</label>
       <label style="display:block;cursor:pointer;"><input type="checkbox" id="opt-kumi" style="vertical-align:middle;margin-right:6px;">kumiサーバをフェイルオーバーに使う（不安定なため既定OFF）</label>
+      <label style="display:block;cursor:pointer;"><input type="checkbox" id="opt-fullcache" style="vertical-align:middle;margin-right:6px;">長期路線も完全保存（間引きしない・キャッシュ容量大／ダウンロード用）</label>
+      <label style="display:block;cursor:pointer;"><input type="checkbox" id="opt-memcache" style="vertical-align:middle;margin-right:6px;">メモリキャッシュを使う（容量無制限・全件保存／要ダウンロード・リロードで消える）</label>
     </div>
+    <div id="cache-io" style="margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+      <button class="loader-btn alt" onclick="downloadCache()" style="font-size:12px;padding:6px 12px;">💾 キャッシュをダウンロード</button>
+      <button class="loader-btn alt" onclick="document.getElementById('cache-file-input').click()" style="font-size:12px;padding:6px 12px;">📤 キャッシュを復元（アップロード）</button>
+      <input type="file" id="cache-file-input" accept=".json,application/json" style="display:none" onchange="if(this.files[0]){uploadCache(this.files[0]); this.value='';}">
+    </div>
+    <div id="cache-io-msg" style="margin-top:6px;font-size:11px;color:#555;min-height:14px;"></div>
     <div id="loader-err"></div>
   </div>
 </div>
@@ -177,6 +185,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
     <div id="progress"><div id="progress-fill"></div></div>
     <span id="progress-label">0/0</span>
     <button class="hbtn" onclick="openLog()">📋 ログ</button>
+    <button class="hbtn" onclick="downloadCache()">💾 キャッシュ保存</button>
     <button class="hbtn" onclick="clearCache()">🗑 キャッシュ削除</button>
     <button class="hbtn" onclick="reload()">📁 別データ</button>
   </div>
@@ -419,6 +428,9 @@ const plMap = {};
 let activePl = null, activeRow = null;
 let USE_KUMI = false;        // kumiフェイルオーバー（JSON読込画面で設定）
 let USE_STRATEGY_B = true;   // 戦略B（JSON読込画面で設定）
+let FULL_CACHE = false;      // 長期路線も完全保存（間引きせず・JSON読込画面で設定）。DL用に全wayを残す。
+let MEM_CACHE = {};          // メモリキャッシュ（key→JSON文字列）。容量無制限(RAM)。USE_MEM_CACHE時に使用。
+let USE_MEM_CACHE = false;   // メモリキャッシュモード（JSON読込画面で設定）。ONなら全件メモリ保存・要DL。間引きは無効。
 const SESSION_REL_GEOM = new Map(); // relId→ways: このページセッション中のメモリ共有（再試行・区間間で再取得しない）
 const SESSION_FETCHED = new Set();  // このセッションでAPIから取得したrelId（採用時にlocalStorageへ書く対象）
 const LOG = {}; // key -> ログオブジェクト
@@ -445,7 +457,7 @@ dropZone.addEventListener('drop', e => {
 
 // チェックボックス状態の永続化（キーはosm系prefix外なので「キャッシュ削除」の影響を受けない）
 (function(){
-  for(const [id,key,def] of [['opt-stratb','optStratB',true],['opt-kumi','optKumi',false]]){
+  for(const [id,key,def] of [['opt-stratb','optStratB',true],['opt-kumi','optKumi',false],['opt-fullcache','optFullCache',false],['opt-memcache','optMemCache',false]]){
     const el=document.getElementById(id);
     if(!el) continue;
     const saved=localStorage.getItem(key);
@@ -483,6 +495,8 @@ async function tryAutoLoad() {
 function startApp(data) {
   USE_KUMI = document.getElementById('opt-kumi')?.checked || false;
   USE_STRATEGY_B = document.getElementById('opt-stratb')?.checked ?? true;
+  FULL_CACHE = document.getElementById('opt-fullcache')?.checked || false;
+  USE_MEM_CACHE = document.getElementById('opt-memcache')?.checked || USE_MEM_CACHE;   // アップロードで先にONになっていれば維持
   SEGS = data.segs || [];
   DAY_LABELS = data.dayLabels || [];
   if (data.title) {
@@ -540,6 +554,20 @@ function lsSetSmart(key, val, prefixOrder){
   }
   return false;
 }
+// ---- キャッシュ抽象化: USE_MEM_CACHE時はメモリ(MEM_CACHE)を使い、通常はlocalStorage ----
+// メモリモードは容量無制限(RAM)・退避なし。読みはメモリ優先→localStorageフォールバック。
+function cacheRead(key){
+  if(USE_MEM_CACHE && Object.prototype.hasOwnProperty.call(MEM_CACHE, key)) return MEM_CACHE[key];
+  return localStorage.getItem(key);
+}
+function cacheWrite(key, val, prefixOrder){
+  if(USE_MEM_CACHE){ MEM_CACHE[key] = val; return true; }   // 容量無制限・退避不要
+  return lsSetSmart(key, val, prefixOrder);
+}
+function cacheRemove(key){
+  if(USE_MEM_CACHE) delete MEM_CACHE[key];
+  try{ localStorage.removeItem(key); }catch(e){}
+}
 // 合計処理時間: 各区間のtotalTime合計と、ロード全体の実時間（壁時計）の両方を出す。
 //  各区間のtotalTimeはシリアル実行の区間内実時間で重複・漏れなし。合計＝総処理時間。
 let WALL_START=null, WALL_END=null;
@@ -556,28 +584,33 @@ function totalTimeStr(){
 
 function cacheStats(){
   let q={n:0,c:0}, r={n:0,c:0}, g={n:0,c:0}, w={n:0,c:0};
-  for(let i=0;i<localStorage.length;i++){
-    const k=localStorage.key(i); const v=localStorage.getItem(k)||'';
+  const tally=(k,v)=>{
     if(k.startsWith('osmrel_')){r.n++;r.c+=v.length;}
     else if(k.startsWith('osmseg_')){g.n++;g.c+=v.length;}
     else if(k.startsWith('osmway_')){w.n++;w.c+=v.length;}
     else if(k.startsWith('osm_')){q.n++;q.c+=v.length;}
+  };
+  if(USE_MEM_CACHE){
+    for(const k of Object.keys(MEM_CACHE)) tally(k, MEM_CACHE[k]||'');
+  } else {
+    for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); tally(k, localStorage.getItem(k)||''); }
   }
   const mb=x=>(x*2/1048576).toFixed(2); // JS文字列はUTF-16≒2byte/char換算
-  return `キャッシュ統計: クエリosm_ ${q.n}件 ${mb(q.c)}MB ／ relation osmrel_ ${r.n}件 ${mb(r.c)}MB ／ way直接osmway_ ${w.n}件 ${mb(w.c)}MB ／ 採用リストosmseg_ ${g.n}件 ${mb(g.c)}MB ／ 今回退避 ${EVICTED}件`;
+  const src=USE_MEM_CACHE?'[メモリ]':'';
+  return `キャッシュ統計${src}: クエリosm_ ${q.n}件 ${mb(q.c)}MB ／ relation osmrel_ ${r.n}件 ${mb(r.c)}MB ／ way直接osmway_ ${w.n}件 ${mb(w.c)}MB ／ 採用リストosmseg_ ${g.n}件 ${mb(g.c)}MB ／ 今回退避 ${EVICTED}件`;
 }
 function cacheKey(q){ return "osm_" + btoa(unescape(encodeURIComponent(q))); }
 function cacheGet(q){
   try {
-    const raw = localStorage.getItem(cacheKey(q));
+    const raw = cacheRead(cacheKey(q));
     if (!raw) return null;
     const {ts,data} = JSON.parse(raw);
-    if (Date.now()-ts > CACHE_TTL){ localStorage.removeItem(cacheKey(q)); return null; }
+    if (Date.now()-ts > CACHE_TTL){ cacheRemove(cacheKey(q)); return null; }
     return data;
   } catch(e){ return null; }
 }
 function cacheSet(q,data){
-  try { lsSetSmart(cacheKey(q), JSON.stringify({ts:Date.now(),data}), ["osm_"]); } catch(e){}
+  try { cacheWrite(cacheKey(q), JSON.stringify({ts:Date.now(),data}), ["osm_"]); } catch(e){}
 }
 // ---- relation単位ジオメトリのキャッシュ（採用relationのみ保存・slim形式で容量節約） ----
 function relCacheKey(relId){ return "osmrel_"+relId; }
@@ -585,10 +618,10 @@ function relCacheKey(relId){ return "osmrel_"+relId; }
 // 既定false: 完全版のみ。通常Step2は全way（分岐含む）が必要なため、部分キャッシュはミス扱い→API取得。
 function relCacheGet(relId, allowPartial=false){
   try {
-    const raw = localStorage.getItem(relCacheKey(relId));
+    const raw = cacheRead(relCacheKey(relId));
     if(!raw) return null;
     const obj = JSON.parse(raw);
-    if(Date.now()-obj.ts > CACHE_TTL){ localStorage.removeItem(relCacheKey(relId)); return null; }
+    if(Date.now()-obj.ts > CACHE_TTL){ cacheRemove(relCacheKey(relId)); return null; }
     if(obj.p && !allowPartial) return null;
     return obj.ways;
   } catch(e){ return null; }
@@ -596,7 +629,7 @@ function relCacheGet(relId, allowPartial=false){
 // relationキャッシュが間引き保存(p:1)かどうか（完全版なら false、未保持も false）。
 function relCacheIsPartial(relId){
   try {
-    const raw = localStorage.getItem(relCacheKey(relId));
+    const raw = cacheRead(relCacheKey(relId));
     if(!raw) return false;
     const obj = JSON.parse(raw);
     if(Date.now()-obj.ts > CACHE_TTL) return false;
@@ -618,10 +651,10 @@ function wayCacheKey(seg){
 }
 function wayCacheGet(seg){
   try{
-    const raw=localStorage.getItem(wayCacheKey(seg));
+    const raw=cacheRead(wayCacheKey(seg));
     if(!raw) return null;
     const obj=JSON.parse(raw);
-    if(Date.now()-obj.ts>CACHE_TTL){ localStorage.removeItem(wayCacheKey(seg)); return null; }
+    if(Date.now()-obj.ts>CACHE_TTL){ cacheRemove(wayCacheKey(seg)); return null; }
     return obj.ways; // [{id, geometry:[{lat,lon}], name}]
   }catch(e){ return null; }
 }
@@ -629,7 +662,7 @@ function wayCacheSet(seg, wayEls){
   try{
     const slim=wayEls.map(w=>({id:w.id, name:(w.tags&&w.tags.name)||null,
       geometry:w.geometry.map(g=>({lat:+(+g.lat).toFixed(5), lon:+(+g.lon).toFixed(5)}))}));
-    lsSetSmart(wayCacheKey(seg), JSON.stringify({ts:Date.now(), ways:slim}), ["osm_","osmrel_"]);
+    cacheWrite(wayCacheKey(seg), JSON.stringify({ts:Date.now(), ways:slim}), ["osm_","osmrel_"]);
   }catch(e){}
 }
 // usedWayIdSet: 採用経路で実際に使ったwayのidセット。
@@ -639,11 +672,11 @@ function wayCacheSet(seg, wayEls){
 function relCacheSet(relId, ways, usedWayIdSet){
   try {
     let target = ways, partial = false;
-    if(ways.length > LARGE_REL_WAYS && usedWayIdSet && usedWayIdSet.size){
+    if(!FULL_CACHE && !USE_MEM_CACHE && ways.length > LARGE_REL_WAYS && usedWayIdSet && usedWayIdSet.size){
       const picked = ways.filter(w=>usedWayIdSet.has(w.id));
       if(picked.length){
         try{
-          const prevRaw = localStorage.getItem(relCacheKey(relId));
+          const prevRaw = cacheRead(relCacheKey(relId));
           if(prevRaw){
             const prev = JSON.parse(prevRaw);
             if(prev.p && Array.isArray(prev.ways)){
@@ -659,7 +692,7 @@ function relCacheSet(relId, ways, usedWayIdSet){
     const slim = target.map(w=>({id:w.id, geometry:w.geometry.map(g=>({lat:+(+g.lat).toFixed(5), lon:+(+g.lon).toFixed(5)}))}));
     const obj = {ts:Date.now(), ways:slim};
     if(partial) obj.p = 1;
-    const ok = lsSetSmart(relCacheKey(relId), JSON.stringify(obj), ["osm_","osmrel_"]);
+    const ok = cacheWrite(relCacheKey(relId), JSON.stringify(obj), ["osm_","osmrel_"]);
     return {ok, saved:slim.length, total:ways.length, partial};
   } catch(e){ return {ok:false, saved:0, total:(ways&&ways.length)||0, partial:false}; }
 }
@@ -673,28 +706,89 @@ function segRelsKey(seg){
 }
 function segRelsGet(seg){
   try {
-    const raw = localStorage.getItem(segRelsKey(seg));
+    const raw = cacheRead(segRelsKey(seg));
     if(!raw) return null;
     const {ts,rels} = JSON.parse(raw);
-    if(Date.now()-ts > CACHE_TTL){ localStorage.removeItem(segRelsKey(seg)); return null; }
+    if(Date.now()-ts > CACHE_TTL){ cacheRemove(segRelsKey(seg)); return null; }
     return rels;
   } catch(e){ return null; }
 }
 function segRelsSet(seg, rels){
   try {
-    lsSetSmart(segRelsKey(seg), JSON.stringify({ts:Date.now(), rels}), ["osm_","osmrel_"]);
+    cacheWrite(segRelsKey(seg), JSON.stringify({ts:Date.now(), rels}), ["osm_","osmrel_"]);
     if(PROTECTED_RELS) rels.forEach(id=>PROTECTED_RELS.add('osmrel_'+id)); // 退避保護リストへ追記
   } catch(e){}
 }
 function clearCache(){
-  const ks = Object.keys(localStorage).filter(k=>/^osm(_|rel_|seg_|way_)/.test(k));
-  if(ks.length===0){ alert('削除するキャッシュはありません。'); return; }
+  const lsKeys = Object.keys(localStorage).filter(k=>/^osm(_|rel_|seg_|way_)/.test(k));
+  const memKeys = Object.keys(MEM_CACHE).filter(k=>/^osm(_|rel_|seg_|way_)/.test(k));
+  const totalKeys = new Set([...lsKeys, ...memKeys]).size;
+  if(totalKeys===0){ alert('削除するキャッシュはありません。'); return; }
   // 容量の概算（文字数ベース）
-  let bytes=0; for(const k of ks){ const v=localStorage.getItem(k)||''; bytes+=k.length+v.length; }
+  let bytes=0; for(const k of lsKeys){ const v=localStorage.getItem(k)||''; bytes+=k.length+v.length; }
+  for(const k of memKeys){ bytes+=k.length+(MEM_CACHE[k]||'').length; }
   const mb=(bytes/1048576).toFixed(2);
-  if(!confirm(`キャッシュ ${ks.length}件（約${mb}MB）を削除します。\n次回読込時は全区間をOverpassから再取得するため時間がかかります。\n\n削除してよろしいですか？`)) return;
-  ks.forEach(k=>localStorage.removeItem(k));
-  alert(`キャッシュを${ks.length}件削除しました。リロードで再取得します。`);
+  const memNote = memKeys.length ? `（うちメモリ${memKeys.length}件）` : '';
+  if(!confirm(`キャッシュ ${totalKeys}件${memNote}（約${mb}MB）を削除します。\n次回読込時は全区間をOverpassから再取得するため時間がかかります。\n\n削除してよろしいですか？`)) return;
+  lsKeys.forEach(k=>localStorage.removeItem(k));
+  memKeys.forEach(k=>{ delete MEM_CACHE[k]; });
+  alert(`キャッシュを${totalKeys}件削除しました。リロードで再取得します。`);
+}
+
+// キャッシュ(osm*)をJSONファイルにエクスポート（ダウンロード）。メモリとlocalStorage両方を統合。
+function downloadCache(){
+  const setMsg=(t,err)=>{ const el=document.getElementById('cache-io-msg'); if(el){ el.textContent=t; el.style.color=err?'#c0392b':'#2e7d32'; } };
+  const isOsm=k=>/^osm(_|rel_|seg_|way_)/.test(k);
+  // localStorage → メモリの順でマージ（メモリ優先＝最新）
+  const all={};
+  for(const k of Object.keys(localStorage)) if(isOsm(k)){ const v=localStorage.getItem(k); if(v!=null) all[k]=v; }
+  for(const k of Object.keys(MEM_CACHE)) if(isOsm(k)) all[k]=MEM_CACHE[k];
+  const ks=Object.keys(all);
+  if(ks.length===0){ setMsg('保存するキャッシュがありません。', true); alert('保存するキャッシュがありません。'); return; }
+  const obj = {__cache_format:'rail_trip_map', version:1, ts:Date.now(), count:ks.length, data:all};
+  let bytes=0; for(const k of ks) bytes+=k.length+all[k].length;
+  try{
+    const blob = new Blob([JSON.stringify(obj)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const d = new Date(), z=n=>('0'+n).slice(-2);
+    a.href = url; a.download = `rail_cache_${d.getFullYear()}${z(d.getMonth()+1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1500);
+    setMsg(`キャッシュ ${ks.length}件（約${(bytes/1048576).toFixed(2)}MB）をダウンロードしました。`, false);
+  }catch(e){ setMsg('ダウンロード失敗: '+e.message, true); }
+}
+
+// JSONファイルからキャッシュ(osm*)を復元。メモリキャッシュ使用時はメモリへ、通常はlocalStorageへ。
+function uploadCache(file){
+  const setMsg=(t,err)=>{ const el=document.getElementById('cache-io-msg'); if(el){ el.textContent=t; el.style.color=err?'#c0392b':'#2e7d32'; } };
+  // 復元時点のチェックボックス状態で保存先を決定（startApp前でも正しく判定）
+  const toMem = document.getElementById('opt-memcache')?.checked || false;
+  const reader = new FileReader();
+  reader.onload = e => {
+    let obj;
+    try { obj = JSON.parse(e.target.result); }
+    catch(err){ setMsg('読み込み失敗: JSONとして解析できません。', true); return; }
+    const data = (obj && obj.data && typeof obj.data==='object') ? obj.data : obj;   // ラッパー形式/生形式の両対応
+    if(!data || typeof data!=='object'){ setMsg('このファイルはキャッシュ形式ではありません。', true); return; }
+    const keys = Object.keys(data).filter(k=>/^osm(_|rel_|seg_|way_)/.test(k));
+    if(keys.length===0){ setMsg('キャッシュキー(osm*)が見つかりません。', true); return; }
+    const dest = toMem ? 'メモリ' : 'localStorage';
+    if(!confirm(`キャッシュ ${keys.length}件を${dest}に復元します。\n同名キーは上書きされます。よろしいですか？`)){ setMsg('復元をキャンセルしました。', true); return; }
+    if(toMem){
+      // メモリへ（容量無制限・上書き）。USE_MEM_CACHEも有効化して整合させる。
+      USE_MEM_CACHE = true;
+      for(const k of keys) MEM_CACHE[k] = String(data[k]);
+      setMsg(`キャッシュ ${keys.length}件をメモリに復元しました（メモリモードON）。続けてitinerary.jsonを読み込めば再取得を省けます。`, false);
+    } else {
+      let ok=0, fail=0;
+      for(const k of keys){ try{ localStorage.setItem(k, String(data[k])); ok++; }catch(err){ fail++; } }   // 容量超過(QuotaExceeded)等
+      if(fail>0) setMsg(`復元: ${ok}件成功 / ${fail}件失敗（localStorage容量超過。メモリキャッシュをONにすると全件復元できます）。`, true);
+      else setMsg(`キャッシュ ${ok}件をlocalStorageに復元しました。続けてitinerary.jsonを読み込めば再取得を省けます。`, false);
+    }
+  };
+  reader.onerror = ()=> setMsg('ファイル読み込みエラー。', true);
+  reader.readAsText(file);
 }
 
 // =====================================================================
@@ -1773,8 +1867,8 @@ function renderCalendarView(){
     edge.style.background=calTint(t.color);
     const warn=!!seg.warn;
     const dur=calDurMin(seg.dep, seg.arr);
-    const contentMin=warn?46:30;                      // 内容が収まる最小高
-    const h=Math.max(contentMin, Math.round(28 + Math.min(dur,200)*0.5));
+    const contentMin=warn?34:21;                      // 内容が収まる最小高（1行=21px,警告2行=34px）
+    const h=Math.max(contentMin, Math.round(18 + Math.min(dur,210)*0.5));
     edge.style.minHeight=h+'px';
     const nm=el('div','cal-edge-name'); nm.style.color=t.color; nm.textContent=seg.name;
     edge.appendChild(nm);
@@ -2024,6 +2118,14 @@ async function loadAll(){
   buildDotJump();
   const allPls=Object.values(plMap).map(e=>e.osm||e.fallback).filter(Boolean);
   if(allPls.length>0){ try{ map.fitBounds(L.featureGroup(allPls).getBounds(),{padding:[20,20]}); }catch(e){} }
+  // 案A-1: メモリキャッシュ使用時は完了時にDL確認（メモリはリロード/タブを閉じると消えるため）
+  if(USE_MEM_CACHE){
+    setTimeout(()=>{
+      if(confirm('全区間の描画が完了しました。\n\nメモリ上のキャッシュはリロード/タブを閉じると消えます。\n今すぐキャッシュをダウンロードして保存しますか？')){
+        downloadCache();
+      }
+    }, 600);
+  }
 }
 
 async function loadOneSeg(seg){
