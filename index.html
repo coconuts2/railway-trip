@@ -785,13 +785,65 @@ const MAX_STEPS = 4000; // 1 chainあたり最大way本数（step上限）。
 // wayElements からグラフを構築。各wayは1本のエッジ。
 // 端点は近接クラスタリングでマージ（直通運転の会社境界などで端点が数mずれても接続）。
 // 返り値: { adj: Map<clusterKey, [{wayIdx, toKey, coords}]>, ways: [...] }
+// way端点が他wayの「内部node」に一致する箇所（T字分岐・行き違い設備など）で
+// そのwayを分割し、一致点を端点化してグラフ連結を可能にする。
+//  out geom（座標のみ・node ID無し）前提のため座標一致で判定。共有nodeは座標が
+//  完全一致（0m）するのでEPSは小さく取り、並走複線（通常>3m間隔）の誤結合を防ぐ。
+function splitWaysAtJunctions(ways){
+  if(!ways || ways.length<2) return {ways:ways||[], count:0};
+  const EPS = 2;        // 同一nodeとみなす距離(m)。共有node=0m、並走別線≳3m。
+  const cell = 0.0002;  // 候補絞り込み用グリッド（約22m四方）
+  const bk = (lat,lon)=> Math.round(lat/cell)+','+Math.round(lon/cell);
+  // 全wayの端点をグリッド索引化
+  const epBuckets = new Map();
+  for(const w of ways){
+    for(const c of [w.coords[0], w.coords[w.coords.length-1]]){
+      const k=bk(c[0],c[1]);
+      if(!epBuckets.has(k)) epBuckets.set(k,[]);
+      epBuckets.get(k).push({coord:c, wayIdx:w.idx});
+    }
+  }
+  const out=[]; let nSplit=0;
+  for(const w of ways){
+    const cuts=new Set();
+    // 内部頂点（端点を除く）が他wayの端点と一致するか
+    for(let vi=1; vi<w.coords.length-1; vi++){
+      const v=w.coords[vi];
+      const ci=Math.round(v[0]/cell), cj=Math.round(v[1]/cell);
+      let hit=false;
+      for(let di=-1; di<=1 && !hit; di++) for(let dj=-1; dj<=1 && !hit; dj++){
+        const arr=epBuckets.get((ci+di)+','+(cj+dj)); if(!arr) continue;
+        for(const ep of arr){
+          if(ep.wayIdx===w.idx) continue;             // 自分の端点は除外
+          if(haversine(v, ep.coord) <= EPS){ hit=true; break; }
+        }
+      }
+      if(hit) cuts.add(vi);
+    }
+    if(cuts.size===0){ out.push(w); continue; }
+    // 分割点でサブwayに分割（座標・wayId・relIdは引き継ぐ）
+    const cutArr=[0, ...[...cuts].sort((a,b)=>a-b), w.coords.length-1];
+    for(let c=0; c<cutArr.length-1; c++){
+      const seg=w.coords.slice(cutArr[c], cutArr[c+1]+1);
+      if(seg.length>=2) out.push({idx:0, coords:seg, wayId:w.wayId, relId:w.relId});
+    }
+    nSplit += cuts.size;
+  }
+  out.forEach((w,i)=>w.idx=i);
+  return {ways:out, count:nSplit};
+}
+
 function buildGraph(wayElements){
-  const ways = wayElements
+  let ways = wayElements
     .filter(el => el.geometry && el.geometry.length>=2)
     .map((el,i) => {
       const coords = el.geometry.map(g=>[g.lat,g.lon]);
       return { idx:i, coords, wayId: el.id, relId: el._relId || null };
     });
+
+  // T字分岐（端点が他wayの内部nodeに一致）でwayを分割し連結を回復
+  const splitInfo = splitWaysAtJunctions(ways);
+  ways = splitInfo.ways;
 
   // 全wayの端点を集める
   const endpoints = []; // {wayIdx, end:'start'|'end', coord}
@@ -852,7 +904,7 @@ function buildGraph(wayElements){
     addEdge(w.startKey, w, false);
     addEdge(w.endKey, w, true);
   }
-  return {adj, ways};
+  return {adj, ways, junctionSplits: splitInfo.count};
 }
 
 // 座標に最も近いノードキー（クラスタ）を探す
@@ -1312,6 +1364,7 @@ async function fetchRailCoords(seg, log){
   const solve = (ways, label) => {
     const graph = buildGraph(ways);
     if(!graph.ways.length){ log.push({t:'warn', msg:`　${label}: way無し`}); return null; }
+    if(graph.junctionSplits>0){ log.push({t:'info', msg:`　${label}: T字分岐 ${graph.junctionSplits}箇所でway分割（端点⇔内部node接続を回復）`}); }
 
     // 通過点列: [出発, via..., 到着]
     const pts = [fromCoord, ...viaPts, toCoord];
