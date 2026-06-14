@@ -210,7 +210,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
-// rail_trip_map 0613-7
+// rail_trip_map 0613-8
+//  ★0613-8: 「間引き保存→高速パス未達→毎回フル取得」の悪循環を解消（速度優先・方針A）。
+//    原因: 大型relationを間引き保存(採用wayのみ)すると高速パスのsolveが経路再現できず未達
+//      （例: 新快速 way34で降車駅18.8km未達→毎回全relation再取得64秒）。次回also間引きで無限ループ。
+//    ①LARGE_REL_WAYS 400→1000: 632way級(JR京都線等)が完全保存され経路再現可能に（容量+約1.4MB）。
+//      6932way級(新幹線)は引き続き間引き（容量肥大の主因なので維持）。
+//    ②高速パス失敗の記録: 採用relに間引き保存(p:1)が1つでも含まれる区間は、高速パスが未達に
+//      なる公算が高いので最初からスキップして通常フロー直行（無駄な未達試行を省く）。
+//      relCacheIsPartial判定をvia区間限定から「間引きrelを含む全区間」に拡張。
+//    ③osmrel_肥大の自然軽減: 完全保存が増えるが間引き対象を>1000wayに絞ることで上限内に収める。
+//  （旧: 0613-7）
+//  ★0613-7: 戦略C/Dキャッシュ保存 / way直接キャッシュ(osmway_)
+//  ★0613-6: via区間のキャッシュ完全保存
+//  ★0613-5: ログ秒数+合計 / 未達リスト逐次 / via経由優先 / route=bus(戦略D) / 詳細下半分
+//  ★0613-1〜3: 日別表示 / via / 高速パス / 部分描画 / 間引き保存 / 戦略C / 点線ジャンプ等
+//  ★0611-1
 //  ★0613-7: ①戦略C/D（フェリー・ケーブル・索道・バス）でも採用relationをキャッシュ保存。
 //      従来は早期returnで保存処理を通らず、毎回フル取得（高野山ケーブル34秒・石崎汽船24秒）。
 //      saveAdoptedRels を共通関数化し戦略A/B/C/Dすべてで呼ぶ。
@@ -360,7 +375,7 @@ const MAX_RETRY = 3;
 const FETCH_TIMEOUT = 10000;   // [timeout:N]指定が無いクエリの既定(ms)。クライアントは N秒+5秒 で打ち切り
 const NEAR_STATION = 800;      // 端点が駅とみなせる距離(m)
 const FAST_SNAP = 200;         // キャッシュ専用高速パスの採用条件（両端ギャップ上限・m）。誤経路の再生防止のため厳格。
-const LARGE_REL_WAYS = 400;    // これを超えるway数のrelationは「採用経路で使ったway」だけ間引き保存(p:1)
+const LARGE_REL_WAYS = 1000;   // これを超えるway数のrelationのみ間引き保存(p:1)。1000以下は完全保存し高速パスの経路再現を保証（0613-8で400→1000）
 const ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",         // 主（内部でz/lz4へラウンドロビン）
   "https://overpass.kumi.systems/api/interpreter",   // フェイルオーバー（Private.coffee運営）
@@ -1358,18 +1373,17 @@ async function fetchRailCoords(seg, log){
   {
     const adopted = segRelsGet(seg);
     if(adopted && adopted.length){
-      // via区間は経路再現にrelationの完全なwayが必要。採用relationのいずれかが間引き保存(partial)
-      // だと高速パスのレグ連結が断絶するため、高速パスを試さず通常フロー（完全版を取得・保存）へ。
-      const hasVia = parseVia(seg).length > 0;
-      let anyPartialCache = false;
-      if(hasVia){
-        for(const rid of adopted){
-          if(SESSION_REL_GEOM.has(rid)) continue; // セッション完全版があればOK
-          if(relCacheIsPartial(rid)){ anyPartialCache = true; break; }
-        }
+      // 採用relationのいずれかが間引き保存(partial)だと、高速パスのsolveは間引きwayで経路を
+      // 再現できず未達になる公算が高い（大型relを通る区間で頻発）。その場合は無駄な高速パス試行を
+      // 避け、通常フローへ直行（relcacheに完全版があればAPIは叩かない）。
+      // 0613-8: via区間限定だった判定を全区間に拡張（新快速・新幹線等の毎回フル取得を解消）。
+      let anyPartialCache = false; let partialRid=null;
+      for(const rid of adopted){
+        if(SESSION_REL_GEOM.has(rid)) continue; // セッション完全版があればOK
+        if(relCacheIsPartial(rid)){ anyPartialCache = true; partialRid=rid; break; }
       }
-      if(hasVia && anyPartialCache){
-        log.push({t:'info', msg:'高速パス: via区間かつ採用relationが間引きキャッシュ → スキップし通常フローで完全版を取得・保存'});
+      if(anyPartialCache){
+        log.push({t:'info', msg:`高速パス: 採用relation ${partialRid} が間引きキャッシュ → スキップし通常フローで完全版を取得・保存（無駄な未達試行を回避）`});
       } else {
       const cachedWays=[]; const seenW=new Set(); let missing=null;
       for(const rid of adopted){
