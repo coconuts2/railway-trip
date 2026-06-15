@@ -115,16 +115,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .cal-node.start .cal-node-dot{background:#222;border-color:#222;}
 .cal-node.stay .cal-node-dot{background:#16a34a;border-color:#0f7a37;}
 .cal-node-line{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 6px;}
+.cal-node-line + .cal-node-line{margin-top:1px;}
 .cal-node-tw{display:inline-flex;align-items:baseline;gap:2px;flex-shrink:0;}
 .cal-node-time{font-size:11px;font-weight:700;color:#444;font-family:'SF Mono',Consolas,monospace;}
 .cal-node-suffix{font-size:9px;color:#999;}
-.cal-node-sep{font-size:10px;color:#bbb;flex-shrink:0;}
 .cal-node-name{font-size:12px;font-weight:600;color:#1a1a1a;}
 .cal-node-tag{font-size:10px;color:#0f7a37;font-weight:600;}
 .cal-node.start .cal-node-tag{color:#333;}
 .cal-edge{position:relative;margin:2px 0 2px -2px;padding:3px 9px;border-radius:5px;cursor:pointer;border-left:4px solid #999;background:#f2f2f4;transition:filter .12s;display:flex;flex-direction:column;justify-content:center;}
 .cal-edge:hover{filter:brightness(0.96);}
+.cal-edge-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:1px 7px;}
 .cal-edge-name{font-size:11px;font-weight:700;line-height:1.35;}
+.cal-edge-dur{font-size:9px;color:#888;font-weight:normal;flex-shrink:0;white-space:nowrap;}
 .cal-edge-note{font-size:10px;margin-top:2px;line-height:1.4;color:#c0392b;font-weight:600;}
 @media (max-width:768px){
   #main{flex-direction:column;}
@@ -1680,6 +1682,9 @@ function initMapAndUI(){
     attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom:19
   }).addTo(map);
+  // 軌跡の縁取り(アウトライン)用pane。overlayPane(z=400)より下に置き、色付き線の下に敷く。
+  map.createPane('railOutline');
+  map.getPane('railOutline').style.zIndex = 390;
   renderCalendarView();
   buildLegend();
   loadAll();
@@ -1687,19 +1692,22 @@ function initMapAndUI(){
 
 function makePl(coords, seg){
   const t=T[seg.type];
-  const pl=L.polyline(coords,{color:t.color,weight:t.w,dashArray:t.dash,opacity:0.85});
-  pl._baseW=t.w; pl._active=false;
+  // 視認性向上のアウトライン（濃紺・一回り太い・同じdash柄）を下層paneに敷く
+  const outline=L.polyline(coords,{color:'#16213e',weight:t.w+4,dashArray:t.dash,opacity:0.5,pane:'railOutline',interactive:false});
+  const pl=L.polyline(coords,{color:t.color,weight:t.w,dashArray:t.dash,opacity:0.9});
+  pl._baseW=t.w; pl._active=false; pl._outline=outline;
   pl.bindTooltip(`<b>${seg.name}</b><br>${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b><br><span style="color:#666">${seg.note}</span>`,{sticky:true,direction:'top'});
   pl.on('mouseover',function(){if(!this._active)this.setStyle({weight:this._baseW+2,opacity:1});});
-  pl.on('mouseout',function(){if(!this._active)this.setStyle({weight:this._baseW,opacity:0.85});});
+  pl.on('mouseout',function(){if(!this._active)this.setStyle({weight:this._baseW,opacity:0.9});});
   pl.on('click',()=>selectSeg(seg.di,seg.si));
   return pl;
 }
 function dayVisible(di){ return DAY_VISIBLE[di]!==false; }
 function setLayerVisible(layer,on){
   if(!layer) return;
-  if(on){ if(!map.hasLayer(layer)) layer.addTo(map); }
-  else { if(map.hasLayer(layer)) map.removeLayer(layer); }
+  const toggle=L_=>{ if(!L_) return; if(on){ if(!map.hasLayer(L_)) L_.addTo(map); } else { if(map.hasLayer(L_)) map.removeLayer(L_); } };
+  toggle(layer._outline);   // アウトラインを先に（下層pane）
+  toggle(layer);
 }
 // この区間が「未達/直線のみ」フィルタを通過するか（OSM完全成功🗺はDOT_ONLY時に隠す）
 function isDotSeg(key){
@@ -1755,23 +1763,23 @@ function putFallback(seg){
   if(plMap[key]?.osm||plMap[key]?.fallback) return;
   const pl=makePl(seg.fallback,seg);
   plMap[key]={fallback:pl};
-  if(segShouldShow(seg)) pl.addTo(map);
+  if(segShouldShow(seg)) setLayerVisible(pl, true);
 }
 function putOsm(seg,coords,connectors){
   const key=`${seg.di}-${seg.si}`;
   const e=plMap[key]||{};
-  if(e.fallback){map.removeLayer(e.fallback);delete e.fallback;}
-  if(e.osm)map.removeLayer(e.osm);
+  if(e.fallback){ setLayerVisible(e.fallback,false); delete e.fallback; }
+  if(e.osm) setLayerVisible(e.osm,false);
   if(e.conn)e.conn.forEach(c=>map.removeLayer(c));
   const pl=makePl(coords,seg);
   const conn=(connectors||[]).map(makeConnector);
   plMap[key]={osm:pl, conn};
-  if(segShouldShow(seg)){ pl.addTo(map); conn.forEach(c=>c.addTo(map)); }
+  if(segShouldShow(seg)){ setLayerVisible(pl, true); conn.forEach(c=>c.addTo(map)); }
 }
 function getActivePl(di,si){ const e=plMap[`${di}-${si}`]; return e?.osm||e?.fallback||null; }
 
 function resetActive(){
-  if(activePl){activePl._active=false;activePl.setStyle({weight:activePl._baseW,opacity:0.85});activePl=null;}
+  if(activePl){activePl._active=false;activePl.setStyle({weight:activePl._baseW,opacity:0.9});activePl=null;}
   if(activeRow){activeRow.classList.remove('active');activeRow=null;}
 }
 function selectSeg(di,si){
@@ -1820,6 +1828,8 @@ function calDurMin(dep, arr){
   if(a==null||b==null) return 0;
   let d=b-a; if(d<0) d+=1440; return d;
 }
+// 移動時間(分) → "X時間Y分"/"Y分"。0や不明は空文字。
+function fmtDur(mins){ if(!mins||mins<=0) return ''; const h=Math.floor(mins/60), m=mins%60; return h>0?(m>0?`${h}時間${m}分`:`${h}時間`):`${m}分`; }
 
 function renderCalendarView(){
   const cal=document.getElementById('calendar-body');
@@ -1846,20 +1856,25 @@ function renderCalendarView(){
     const sf=el('span','cal-node-suffix'); sf.textContent=suffix;
     tw.appendChild(tm); tw.appendChild(sf); return tw;
   };
-  // 駅ノード：着時刻・発時刻のどちらか/両方＋駅名＋任意タグ
+  // 駅ノード：着時刻・発時刻を「改行で縦並び」。駅名は最終行（発があれば発行、なければ着行）に。
   const stopNode=({arr,dep,name,kind,tag})=>{
     const n=el('div','cal-node'+(kind?' '+kind:''));
     n.appendChild(el('div','cal-node-dot'));
-    const line=el('div','cal-node-line');
-    if(arr!=null) line.appendChild(timeTw(arr,'着'));
-    if(arr!=null && dep!=null){ const sep=el('span','cal-node-sep'); sep.textContent='→'; line.appendChild(sep); }
-    if(dep!=null) line.appendChild(timeTw(dep,'発'));
-    const nm=el('span','cal-node-name'); nm.textContent=name; line.appendChild(nm);
-    if(tag){ const tg=el('span','cal-node-tag'); tg.textContent=tag; line.appendChild(tg); }
-    n.appendChild(line);
+    const both = arr!=null && dep!=null;
+    const addName=(ln)=>{ const nm=el('span','cal-node-name'); nm.textContent=name; ln.appendChild(nm); if(tag){ const tg=el('span','cal-node-tag'); tg.textContent=tag; ln.appendChild(tg); } };
+    if(arr!=null){                                   // 着行（両方あれば着のみ）
+      const ln=el('div','cal-node-line'); ln.appendChild(timeTw(arr,'着'));
+      if(!both) addName(ln);
+      n.appendChild(ln);
+    }
+    if(dep!=null){                                   // 発行（駅名・タグはここ）
+      const ln=el('div','cal-node-line'); ln.appendChild(timeTw(dep,'発'));
+      addName(ln);
+      n.appendChild(ln);
+    }
     return n;
   };
-  // 列車エッジ：色付きボックス。路線名1行＋（warn時のみnote1行）。高さは移動時間に比例。
+  // 列車エッジ：色付きボックス。路線名＋移動時間（小さい字）。warn時のみnote。高さは移動時間に比例。
   const edgeEl=seg=>{
     const t=T[seg.type]||{color:'#9e9e9e'};
     const edge=el('div','cal-edge');
@@ -1870,11 +1885,13 @@ function renderCalendarView(){
     const contentMin=warn?34:21;                      // 内容が収まる最小高（1行=21px,警告2行=34px）
     const h=Math.max(contentMin, Math.round(18 + Math.min(dur,210)*0.5));
     edge.style.minHeight=h+'px';
-    const nm=el('div','cal-edge-name'); nm.style.color=t.color; nm.textContent=seg.name;
-    edge.appendChild(nm);
-    if(warn && seg.note){
-      const nt=el('div','cal-edge-note'); nt.textContent=seg.note; edge.appendChild(nt);
-    }
+    const head=el('div','cal-edge-head');
+    const nm=el('span','cal-edge-name'); nm.style.color=t.color; nm.textContent=seg.name;
+    head.appendChild(nm);
+    const ds=fmtDur(dur);
+    if(ds){ const du=el('span','cal-edge-dur'); du.textContent=ds; head.appendChild(du); }
+    edge.appendChild(head);
+    if(warn && seg.note){ const nt=el('div','cal-edge-note'); nt.textContent=seg.note; edge.appendChild(nt); }
     edge.onclick=()=>selectSeg(seg.di, seg.si);        // 地図連動
     return edge;
   };
