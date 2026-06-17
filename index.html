@@ -145,6 +145,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
   .seg-row:active{background:#eef3ff;}
   .dj-item:active{background:#ffe9e3;}
 }
+/* 行程表シートのつまみ（既定は非表示・スマホ縦画面のみ表示） */
+#sheet-handle{display:none;align-items:center;justify-content:center;height:22px;flex-shrink:0;cursor:grab;background:#fff;border-radius:18px 18px 0 0;touch-action:none;}
+#sheet-handle:active{cursor:grabbing;}
+.sheet-grip{width:38px;height:5px;border-radius:3px;background:#c8c8d0;transition:background .15s;}
+#sheet-handle:active .sheet-grip{background:#9a9aa5;}
+/* ===== スマホ縦画面：行程表を下からのスライドシート化 ===== */
+@media (max-width:768px) and (orientation:portrait){
+  #main{position:relative;}
+  #map{position:absolute;inset:0;width:auto;height:auto;flex:none;}
+  #panel{
+    position:absolute;left:0;right:0;bottom:0;width:100%;min-width:0;
+    height:var(--sheet-h,60%);max-height:100%;
+    border-left:none;border-top:none;border-radius:18px 18px 0 0;
+    box-shadow:0 -6px 22px rgba(0,0,0,0.16);
+    transition:height .3s cubic-bezier(.32,.72,0,1);
+    z-index:30;overflow:hidden;display:flex;flex-direction:column;
+  }
+  #panel.dragging{transition:none;}
+  #sheet-handle{display:flex;}
+  #cal-head{flex-shrink:0;}
+  #calendar-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  /* 詳細パネルもシートに合わせて下部の大きめオーバーレイに */
+  #det{width:100%;height:70%;right:0;bottom:0;border-radius:18px 18px 0 0;z-index:40;}
+}
 </style>
 </head>
 <body>
@@ -195,6 +219,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <div id="main">
   <div id="map"></div>
   <div id="panel">
+    <div id="sheet-handle"><div class="sheet-grip"></div></div>
     <div id="cal-head">
       <span id="cal-title">📅 行程表</span>
       <div id="cal-head-ctrls">
@@ -410,16 +435,21 @@ const ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",   // フェイルオーバー（Private.coffee運営）
 ];
 
+// fallback（推定の直線）区間だけ点線にする。OSM実ジオメトリの線は全て実線。
+const FALLBACK_DASH = '7,6';
+
+// 路線種別の色・太さ（単一ソース）。dashは廃止し実線/点線はmakePlのisFallbackで制御。
+// 配色: 明るめ・爽やか・地図の淡色から分離して見える中彩度トーンに刷新。
 const T = {
-  shinkansen:{label:'新幹線',color:'#534AB7',dash:null,w:5},
-  kanko:{label:'観光列車',color:'#D85A30',dash:'8,5',w:4},
-  tokkyu:{label:'特急・在来線',color:'#185FA5',dash:'4,3',w:3},
-  local:{label:'ローカル線',color:'#854F0B',dash:'6,4',w:3},
-  ferry:{label:'船・フェリー',color:'#0F6E56',dash:'4,4',w:3},
-  cable:{label:'ケーブル・ロープウェイ',color:'#B7791F',dash:'2,3',w:3},
-  bus:{label:'バス・路面電車',color:'#4a9922',dash:'4,3',w:2},
-  taxi:{label:'タクシー',color:'#888780',dash:'3,4',w:2},
-  plane:{label:'飛行機',color:'#3C3489',dash:'2,6',w:4},
+  shinkansen:{label:'新幹線',                color:'#1E73E8', w:5},  // 青
+  kanko:     {label:'観光列車',              color:'#F0603A', w:4},  // コーラル
+  tokkyu:    {label:'特急・在来線',          color:'#8E34C7', w:3},  // 紫
+  local:     {label:'ローカル線',            color:'#1FA34D', w:3},  // 緑
+  ferry:     {label:'船・フェリー',          color:'#0EA5B7', w:3},  // ティール
+  cable:     {label:'ケーブル・ロープウェイ', color:'#D99211', w:3},  // アンバー
+  bus:       {label:'バス・路面電車',        color:'#DB2777', w:2},  // ローズ
+  taxi:      {label:'タクシー',              color:'#64748B', w:2},  // スレート
+  plane:     {label:'飛行機',                color:'#3730A3', w:4},  // インディゴ
 };
 
 // グローバル状態
@@ -427,6 +457,7 @@ let SEGS = [];
 let DAY_LABELS = [];
 let map = null;
 const plMap = {};
+let STATION_RENDERER = null; // 乗降駅○用のSVGレンダラ（専用pane・路線より上に描画）
 let activePl = null, activeRow = null;
 let USE_KUMI = false;        // kumiフェイルオーバー（JSON読込画面で設定）
 let USE_STRATEGY_B = true;   // 戦略B（JSON読込画面で設定）
@@ -1682,20 +1713,80 @@ function initMapAndUI(){
     attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom:19
   }).addTo(map);
-  // 軌跡の縁取り(アウトライン)用pane。overlayPane(z=400)より下に置き、色付き線の下に敷く。
-  map.createPane('railOutline');
-  map.getPane('railOutline').style.zIndex = 390;
+  // 乗降駅○用のpane。overlayPane(z=400)より上に置き、路線の上に駅マーカーを重ねる。
+  map.createPane('stationPane');
+  map.getPane('stationPane').style.zIndex = 450;
+  STATION_RENDERER = L.svg({pane:'stationPane'});
   renderCalendarView();
   buildLegend();
+  initSheetDrag();
+  applySheet();
   loadAll();
 }
 
-function makePl(coords, seg){
-  const t=T[seg.type];
-  // 視認性向上のアウトライン（濃紺・一回り太い・同じdash柄）を下層paneに敷く
-  const outline=L.polyline(coords,{color:'#16213e',weight:t.w+4,dashArray:t.dash,opacity:0.5,pane:'railOutline',interactive:false});
-  const pl=L.polyline(coords,{color:t.color,weight:t.w,dashArray:t.dash,opacity:0.9});
-  pl._baseW=t.w; pl._active=false; pl._outline=outline;
+// =====================================================================
+// モバイル縦画面：行程表ボトムシート（下から上にスライド／高さ切替）
+// 縦画面のみ有効。つまみをタップで peek→half→full を巡回、ドラッグで任意の高さ→近い段にスナップ。
+// =====================================================================
+const SHEET_STATES=[ {key:'peek',pct:30}, {key:'half',pct:60}, {key:'full',pct:100} ];
+let sheetIdx=1;  // 既定=half（縦画面ですぐ使える高さ）
+function isPortraitPhone(){
+  return window.matchMedia('(max-width:768px) and (orientation:portrait)').matches;
+}
+function mainH(){ const m=document.getElementById('main'); return m?m.getBoundingClientRect().height:window.innerHeight; }
+function applySheet(){
+  const panel=document.getElementById('panel');
+  if(!panel) return;
+  if(!isPortraitPhone()){ panel.style.removeProperty('--sheet-h'); return; }
+  panel.style.setProperty('--sheet-h', SHEET_STATES[sheetIdx].pct+'%');
+}
+function cycleSheet(){ sheetIdx=(sheetIdx+1)%SHEET_STATES.length; applySheet(); }
+function initSheetDrag(){
+  const handle=document.getElementById('sheet-handle');
+  const panel=document.getElementById('panel');
+  if(!handle||!panel) return;
+  let startY=0,startH=0,dragging=false,moved=false;
+  const onStart=y=>{ if(!isPortraitPhone())return; dragging=true;moved=false;startY=y;
+    startH=panel.getBoundingClientRect().height; panel.classList.add('dragging'); };
+  const onMove=y=>{ if(!dragging)return; const dy=startY-y; if(Math.abs(dy)>4)moved=true;
+    const H=mainH(); let h=startH+dy; h=Math.max(H*0.16,Math.min(H,h));
+    panel.style.setProperty('--sheet-h',(h/H*100)+'%'); };
+  const onEnd=()=>{ if(!dragging)return; dragging=false; panel.classList.remove('dragging');
+    if(!moved){ cycleSheet(); return; }                 // 動かさなければタップ＝段送り
+    const curPct=panel.getBoundingClientRect().height/mainH()*100;
+    let best=0,bd=1e9; SHEET_STATES.forEach((s,i)=>{const d=Math.abs(s.pct-curPct); if(d<bd){bd=d;best=i;}});
+    sheetIdx=best; applySheet(); };
+  handle.addEventListener('touchstart',e=>onStart(e.touches[0].clientY),{passive:true});
+  handle.addEventListener('touchmove',e=>{ onMove(e.touches[0].clientY); if(dragging&&moved)e.preventDefault(); },{passive:false});
+  handle.addEventListener('touchend',onEnd);
+  handle.addEventListener('mousedown',e=>{ onStart(e.clientY); e.preventDefault(); });
+  window.addEventListener('mousemove',e=>onMove(e.clientY));
+  window.addEventListener('mouseup',onEnd);
+  window.addEventListener('orientationchange',()=>setTimeout(applySheet,250));
+  window.addEventListener('resize',applySheet);
+}
+
+// 乗降駅の○（白丸＋濃グレー縁）。専用pane(stationPane)で路線の上に描画。クリックは透過。
+function stationDot(latlng){
+  return L.circleMarker(latlng,{ radius:4.5, color:'#374151', weight:2,
+    fillColor:'#ffffff', fillOpacity:1, opacity:0.95,
+    pane:'stationPane', renderer:STATION_RENDERER, interactive:false });
+}
+// 区間の乗車駅(fallback始点)・降車駅(fallback終点)に○を作る。始終点が同座標なら1つ。
+function makeStations(seg){
+  const fb=seg.fallback||[]; if(!fb.length) return [];
+  const a=fb[0], b=fb[fb.length-1], out=[];
+  if(a&&a.length>=2) out.push(stationDot([a[0],a[1]]));
+  if(b&&b.length>=2 && (b[0]!==a[0]||b[1]!==a[1])) out.push(stationDot([b[0],b[1]]));
+  return out;
+}
+
+function makePl(coords, seg, isFallback){
+  const t=T[seg.type]||{color:'#888',w:3};
+  // 囲い(アウトライン)は廃止。fallback(推定直線)のみ点線、OSM実ジオメトリは実線。
+  const pl=L.polyline(coords,{color:t.color,weight:t.w,opacity:0.9,
+    dashArray:isFallback?FALLBACK_DASH:null, lineCap:'round', lineJoin:'round'});
+  pl._baseW=t.w; pl._active=false; pl._fallback=!!isFallback;
   pl.bindTooltip(`<b>${seg.name}</b><br>${seg.from} <b>${seg.dep}</b> → ${seg.to} <b>${seg.arr}</b><br><span style="color:#666">${seg.note}</span>`,{sticky:true,direction:'top'});
   pl.on('mouseover',function(){if(!this._active)this.setStyle({weight:this._baseW+2,opacity:1});});
   pl.on('mouseout',function(){if(!this._active)this.setStyle({weight:this._baseW,opacity:0.9});});
@@ -1705,9 +1796,8 @@ function makePl(coords, seg){
 function dayVisible(di){ return DAY_VISIBLE[di]!==false; }
 function setLayerVisible(layer,on){
   if(!layer) return;
-  const toggle=L_=>{ if(!L_) return; if(on){ if(!map.hasLayer(L_)) L_.addTo(map); } else { if(map.hasLayer(L_)) map.removeLayer(L_); } };
-  toggle(layer._outline);   // アウトラインを先に（下層pane）
-  toggle(layer);
+  if(on){ if(!map.hasLayer(layer)) layer.addTo(map); }
+  else { if(map.hasLayer(layer)) map.removeLayer(layer); }
 }
 // この区間が「未達/直線のみ」フィルタを通過するか（OSM完全成功🗺はDOT_ONLY時に隠す）
 function isDotSeg(key){
@@ -1727,6 +1817,7 @@ function syncSegVisibility(seg){
   const on=segShouldShow(seg);
   setLayerVisible(ent.osm,on); setLayerVisible(ent.fallback,on);
   (ent.conn||[]).forEach(c=>setLayerVisible(c,on));
+  (ent.stations||[]).forEach(m=>setLayerVisible(m,on));
 }
 function syncAllVisibility(){ for(const seg of SEGS) syncSegVisibility(seg); }
 
@@ -1761,9 +1852,11 @@ function putFallback(seg){
   if(!seg.fallback?.length) return;
   const key=`${seg.di}-${seg.si}`;
   if(plMap[key]?.osm||plMap[key]?.fallback) return;
-  const pl=makePl(seg.fallback,seg);
-  plMap[key]={fallback:pl};
-  if(segShouldShow(seg)) setLayerVisible(pl, true);
+  const pl=makePl(seg.fallback,seg,true);   // fallback=点線
+  const e=plMap[key]||{};
+  const stations=e.stations||makeStations(seg);
+  plMap[key]={fallback:pl, stations};
+  if(segShouldShow(seg)){ setLayerVisible(pl, true); stations.forEach(m=>setLayerVisible(m,true)); }
 }
 function putOsm(seg,coords,connectors){
   const key=`${seg.di}-${seg.si}`;
@@ -1771,10 +1864,11 @@ function putOsm(seg,coords,connectors){
   if(e.fallback){ setLayerVisible(e.fallback,false); delete e.fallback; }
   if(e.osm) setLayerVisible(e.osm,false);
   if(e.conn)e.conn.forEach(c=>map.removeLayer(c));
-  const pl=makePl(coords,seg);
+  const pl=makePl(coords,seg,false);   // OSM実ジオメトリ=実線
   const conn=(connectors||[]).map(makeConnector);
-  plMap[key]={osm:pl, conn};
-  if(segShouldShow(seg)){ setLayerVisible(pl, true); conn.forEach(c=>c.addTo(map)); }
+  const stations=e.stations||makeStations(seg);   // fallback時に作った○を引き継ぐ
+  plMap[key]={osm:pl, conn, stations};
+  if(segShouldShow(seg)){ setLayerVisible(pl, true); conn.forEach(c=>c.addTo(map)); stations.forEach(m=>setLayerVisible(m,true)); }
 }
 function getActivePl(di,si){ const e=plMap[`${di}-${si}`]; return e?.osm||e?.fallback||null; }
 
@@ -1956,6 +2050,16 @@ function buildLegend(){
     const ln=document.createElement('div'); ln.className='leg-line'; ln.style.background=t.color;
     el.appendChild(ln); el.appendChild(document.createTextNode(t.label)); lg.appendChild(el);
   }
+  // 乗降駅（○）
+  const st=document.createElement('div'); st.className='leg-item';
+  const dot=document.createElement('span');
+  dot.style.cssText='width:11px;height:11px;border-radius:50%;background:#fff;border:2px solid #374151;display:inline-block;box-sizing:border-box;';
+  st.appendChild(dot); st.appendChild(document.createTextNode('乗降駅')); lg.appendChild(st);
+  // 直線（推定／fallback）= 点線
+  const fb=document.createElement('div'); fb.className='leg-item';
+  const fl=document.createElement('div'); fl.className='leg-line';
+  fl.style.cssText='background:repeating-linear-gradient(90deg,#888 0 6px,transparent 6px 11px);';
+  fb.appendChild(fl); fb.appendChild(document.createTextNode('直線（推定）')); lg.appendChild(fb);
   // 未達コネクタ（経路端点→駅の赤点線）
   const el=document.createElement('div'); el.className='leg-item';
   const ln=document.createElement('div'); ln.className='leg-line';
