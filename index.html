@@ -8,7 +8,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
-#app{display:flex;flex-direction:column;height:100vh;}
+#app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
 #header{padding:7px 14px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
 #header h1{font-size:13px;font-weight:600;color:#222;}
 #status-bar{font-size:11px;color:#888;margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
@@ -156,7 +156,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
   #map{position:absolute;inset:0;width:auto;height:auto;flex:none;}
   #panel{
     position:absolute;left:0;right:0;bottom:0;width:100%;min-width:0;
-    height:var(--sheet-h,60%);max-height:100%;
+    height:var(--sheet-h,230px);max-height:100dvh;
     border-left:none;border-top:none;border-radius:18px 18px 0 0;
     box-shadow:0 -6px 22px rgba(0,0,0,0.16);
     transition:height .3s cubic-bezier(.32,.72,0,1);
@@ -167,7 +167,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
   #cal-head{flex-shrink:0;}
   #calendar-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   /* 詳細パネルもシートに合わせて下部の大きめオーバーレイに */
-  #det{width:100%;height:70%;right:0;bottom:0;border-radius:18px 18px 0 0;z-index:40;}
+  #det{width:100%;height:70dvh;right:0;bottom:0;border-radius:18px 18px 0 0;z-index:40;}
 }
 </style>
 </head>
@@ -264,6 +264,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0617-2  ★0617-2: スマホ縦画面ボトムシートの高さ解決を % → 実px/dvh化（初期peekで約3行表示／half・full切替を修正）。以下は旧版メモ:
 // rail_trip_map 0613-8
 //  ★0613-8: 「間引き保存→高速パス未達→毎回フル取得」の悪循環を解消（速度優先・方針A）。
 //    原因: 大型relationを間引き保存(採用wayのみ)すると高速パスのsolveが経路再現できず未達
@@ -1728,17 +1729,31 @@ function initMapAndUI(){
 // モバイル縦画面：行程表ボトムシート（下から上にスライド／高さ切替）
 // 縦画面のみ有効。つまみをタップで peek→half→full を巡回、ドラッグで任意の高さ→近い段にスナップ。
 // =====================================================================
-const SHEET_STATES=[ {key:'peek',pct:30}, {key:'half',pct:60}, {key:'full',pct:100} ];
-let sheetIdx=1;  // 既定=half（縦画面ですぐ使える高さ）
+const SHEET_STATES=[ {key:'peek'}, {key:'half'}, {key:'full'} ];
+let sheetIdx=0;  // 既定=peek（初期表示で約3行のぞかせる。タップで half→full→peek と巡回）
 function isPortraitPhone(){
   return window.matchMedia('(max-width:768px) and (orientation:portrait)').matches;
 }
-function mainH(){ const m=document.getElementById('main'); return m?m.getBoundingClientRect().height:window.innerHeight; }
+// シートが取りうる最大高さ＝#mainの実高さ（可視ビューポート−ヘッダー）。取得不可なら可視ビューポートで代用。
+function sheetMaxH(){
+  const m=document.getElementById('main');
+  if(m){ const h=m.getBoundingClientRect().height; if(h>0) return h; }
+  return (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+}
+// peek＝つまみ＋見出し＋約3行ぶんの固定高さ。端末差に依存せず最低限の中身を必ず見せる。
+function peekH(){ return Math.min(230, Math.round(sheetMaxH()*0.9)); }
+// 各段の高さ(px)。% を使わず実pxで確定指定し、#calendar-body{flex:1} が0pxに潰れないようにする。
+function stateH(idx){
+  const max=sheetMaxH(), peek=peekH(), k=SHEET_STATES[idx].key;
+  if(k==='peek') return peek;
+  if(k==='half') return Math.max(Math.round(max*0.55), peek+72); // peekと必ず差をつける
+  return max; // full=#mainを満たす（アプリのヘッダーは残す）
+}
 function applySheet(){
   const panel=document.getElementById('panel');
   if(!panel) return;
   if(!isPortraitPhone()){ panel.style.removeProperty('--sheet-h'); return; }
-  panel.style.setProperty('--sheet-h', SHEET_STATES[sheetIdx].pct+'%');
+  panel.style.setProperty('--sheet-h', stateH(sheetIdx)+'px');
 }
 function cycleSheet(){ sheetIdx=(sheetIdx+1)%SHEET_STATES.length; applySheet(); }
 function initSheetDrag(){
@@ -1749,12 +1764,12 @@ function initSheetDrag(){
   const onStart=y=>{ if(!isPortraitPhone())return; dragging=true;moved=false;startY=y;
     startH=panel.getBoundingClientRect().height; panel.classList.add('dragging'); };
   const onMove=y=>{ if(!dragging)return; const dy=startY-y; if(Math.abs(dy)>4)moved=true;
-    const H=mainH(); let h=startH+dy; h=Math.max(H*0.16,Math.min(H,h));
-    panel.style.setProperty('--sheet-h',(h/H*100)+'%'); };
+    const max=sheetMaxH(); let h=startH+dy; h=Math.max(80,Math.min(max,h));
+    panel.style.setProperty('--sheet-h',h+'px'); };
   const onEnd=()=>{ if(!dragging)return; dragging=false; panel.classList.remove('dragging');
     if(!moved){ cycleSheet(); return; }                 // 動かさなければタップ＝段送り
-    const curPct=panel.getBoundingClientRect().height/mainH()*100;
-    let best=0,bd=1e9; SHEET_STATES.forEach((s,i)=>{const d=Math.abs(s.pct-curPct); if(d<bd){bd=d;best=i;}});
+    const curH=panel.getBoundingClientRect().height;    // 現在高さに最も近い段へスナップ
+    let best=0,bd=1e9; SHEET_STATES.forEach((s,i)=>{const d=Math.abs(stateH(i)-curH); if(d<bd){bd=d;best=i;}});
     sheetIdx=best; applySheet(); };
   handle.addEventListener('touchstart',e=>onStart(e.touches[0].clientY),{passive:true});
   handle.addEventListener('touchmove',e=>{ onMove(e.touches[0].clientY); if(dragging&&moved)e.preventDefault(); },{passive:false});
