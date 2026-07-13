@@ -8,6 +8,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
+html,body{overscroll-behavior:none;} /* pull-to-refresh抑止（シート下ドラッグと衝突するため） */
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
 #header{padding:7px 14px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
 #header h1{font-size:13px;font-weight:600;color:#222;}
@@ -18,7 +19,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .hbtn:hover{background:#e3e3e3;}
 #main{display:flex;flex:1;min-height:0;position:relative;}
 #map{flex:1;min-width:0;background:#eef0f2;}
-#panel{width:280px;min-width:280px;background:#fff;border-left:1px solid #e0e0e0;overflow-y:auto;font-size:12px;position:relative;}
+#panel{width:280px;min-width:280px;background:#fff;border-left:1px solid #e0e0e0;overflow:hidden;display:flex;flex-direction:column;font-size:12px;position:relative;}
 #dot-jump{padding:10px 14px;border-bottom:1px solid #eee;background:#fffdfc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #dot-jump.empty{display:none;}
 .dj-head{font-size:11px;font-weight:700;color:#c0392b;margin-bottom:4px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:5px;}
@@ -41,7 +42,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .seg-note{color:#888;font-size:10px;margin-top:1px;line-height:1.4;}
 .warn{color:#c84800;}
 .seg-icon{position:absolute;right:6px;top:6px;font-size:10px;line-height:1;cursor:help;}
-#det{display:none;position:absolute;right:0;bottom:0;width:280px;height:50%;background:#fff;border-top:2px solid #d0d0d0;border-left:1px solid #e0e0e0;overflow-y:auto;z-index:20;box-shadow:0 -4px 16px rgba(0,0,0,0.13);border-radius:12px 0 0 0;}
+#det{display:none;position:absolute;right:0;bottom:0;width:280px;height:50%;background:#fff;border-top:2px solid #d0d0d0;border-left:1px solid #e0e0e0;overflow-y:auto;z-index:20;box-shadow:0 -4px 16px rgba(0,0,0,0.13);border-radius:12px 0 0 0;overscroll-behavior:contain;}
 #det-head{display:flex;align-items:flex-start;gap:6px;padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:3;}
 #det-title{font-size:11px;font-weight:600;color:#222;flex:1;line-height:1.4;}
 #det-close{background:#f0f0f0;border:none;border-radius:5px;padding:2px 7px;cursor:pointer;font-size:11px;color:#555;flex-shrink:0;}
@@ -96,13 +97,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .loader-btn.alt:hover{background:#e0e0e0;}
 #loader-err{color:#c03030;font-size:12px;margin-top:10px;min-height:16px;}
 /* ===== 行程表（カレンダー）===== */
-#cal-head{position:sticky;top:0;z-index:6;display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;padding:8px 12px;background:#fff;border-bottom:1px solid #e0e0e0;}
+#cal-head{flex-shrink:0;display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;padding:8px 12px;background:#fff;border-bottom:1px solid #e0e0e0;}
 #cal-title{font-size:12px;font-weight:700;color:#534AB7;}
 #cal-head-ctrls{display:flex;flex-wrap:wrap;gap:4px 12px;margin-left:auto;}
 #cal-head-ctrls label{display:flex;align-items:center;gap:5px;font-size:11px;color:#555;cursor:pointer;}
 #cal-head-ctrls input{cursor:pointer;margin:0;}
 #ph-dotonly{color:#c0392b;font-weight:600;}
-#calendar-body{padding:10px 12px 28px;background:#fafafa;}
+#calendar-body{padding:10px 12px 28px;background:#fafafa;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
 .cal-day{margin-bottom:18px;}
 .cal-day-head{background:#eef4ee;border-radius:7px;padding:7px 10px;margin-bottom:11px;}
 .cal-day-top{display:flex;align-items:center;gap:7px;}
@@ -128,17 +129,45 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 .cal-edge-name{font-size:11px;font-weight:700;line-height:1.35;}
 .cal-edge-dur{font-size:9px;color:#888;font-weight:normal;flex-shrink:0;white-space:nowrap;}
 .cal-edge-note{font-size:10px;margin-top:2px;line-height:1.4;color:#c0392b;font-weight:600;}
+/* ===== 表示切替（リスト⇄タイム） ===== */
+#view-toggle{display:flex;flex-shrink:0;}
+.vt{border:1px solid #d6d6de;background:#fff;font-size:10px;padding:3px 8px;cursor:pointer;color:#666;line-height:1;}
+.vt:first-child{border-radius:6px 0 0 6px;}
+.vt:last-child{border-radius:0 6px 6px 0;margin-left:-1px;}
+.vt.on{background:#534AB7;border-color:#534AB7;color:#fff;}
+/* ===== タイム表示（Googleカレンダー風 0:00-24:00 縦グリッド。1時間=44px, 日ヘッダ=30px と JSの定数が対応） ===== */
+#calendar-body.time-mode{padding:0;background:#fff;}
+.tg-scroll{display:flex;min-width:max-content;}
+.tg-axis{position:sticky;left:0;z-index:5;width:36px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;}
+.tg-corner{position:sticky;top:0;z-index:6;height:30px;background:#fff;border-bottom:1px solid #dfe0e8;}
+.tg-hour{height:44px;font-size:9px;color:#98a;text-align:right;padding-right:5px;transform:translateY(-6px);}
+.tg-day{width:150px;flex-shrink:0;border-right:1px solid #ececf2;}
+.tg-day-head{position:sticky;top:0;z-index:4;height:30px;display:flex;align-items:center;gap:5px;padding:0 7px;background:#eef4ee;border-bottom:1px solid #dfe6df;font-size:10px;font-weight:700;color:#2e5d3e;white-space:nowrap;overflow:hidden;}
+.tg-day-head input{margin:0;flex-shrink:0;accent-color:#2e5d3e;cursor:pointer;}
+.tg-day-head span{cursor:pointer;overflow:hidden;text-overflow:ellipsis;}
+.tg-col{position:relative;height:1056px;background:repeating-linear-gradient(to bottom,transparent 0,transparent 43px,#eef0f4 43px,#eef0f4 44px);}
+.tg-block{position:absolute;border-left:3px solid #9e9e9e;border-radius:4px;padding:2px 4px;font-size:9px;overflow:hidden;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.05);}
+.tg-block .tb-time{font-size:8px;color:#66708a;line-height:1.2;white-space:nowrap;}
+.tg-block .tb-name{font-weight:700;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.tg-block.tiny{padding:0 4px;display:flex;align-items:center;}
+.tg-block.tiny .tb-time{display:none;}
+.tg-block.tiny .tb-name{-webkit-line-clamp:1;font-size:8px;}
+.tg-block.active{outline:2px solid #4477cc;outline-offset:-1px;z-index:3;}
+@media (hover:hover){.tg-block:hover{filter:brightness(0.97);}}
+/* ===== モバイル共通（タップしやすい余白・フォント） ===== */
 @media (max-width:768px){
-  #main{flex-direction:column;}
-  #panel{width:100%;min-width:0;border-left:none;border-top:1px solid #e0e0e0;height:42vh;}
-  #map{height:58vh;flex:none;}
-  /* 詳細は画面下部に約45vh（パネル上に重なるレイヤ）。背景の一覧は上部に残る。 */
-  #det{width:100%;height:45vh;right:0;bottom:0;border-left:none;border-radius:14px 14px 0 0;}
-  /* タップしやすいよう余白とフォントを少し拡大 */
   .seg-row{padding-top:8px;padding-bottom:8px;}
   .dj-item{padding:6px 8px;}
   #det-close{padding:5px 12px;font-size:13px;}
   .leg-item{font-size:12px;}
+}
+/* ===== スマホ横画面：縦積み+vh固定をやめ、左右分割のまま各部を圧縮（崩れ解消） ===== */
+@media (max-width:1024px) and (orientation:landscape) and (max-height:520px){
+  #header{padding:4px 10px;gap:6px;}
+  #header h1{font-size:12px;}
+  .hbtn{padding:2px 7px;}
+  #panel{width:min(300px,42vw);min-width:230px;}
+  #det{width:min(340px,55vw);height:100%;border-radius:12px 0 0 0;}
 }
 /* タッチ端末でホバー前提のUIが固まらないように */
 @media (hover:none){
@@ -164,8 +193,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
   }
   #panel.dragging{transition:none;}
   #sheet-handle{display:flex;}
-  #cal-head{flex-shrink:0;}
-  #calendar-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  #cal-head{touch-action:none;} /* 見出しもドラッグ面（クリックは通常通り機能） */
   /* 詳細パネルもシートに合わせて下部の大きめオーバーレイに */
   #det{width:100%;height:70dvh;right:0;bottom:0;border-radius:18px 18px 0 0;z-index:40;}
 }
@@ -222,6 +250,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
     <div id="sheet-handle"><div class="sheet-grip"></div></div>
     <div id="cal-head">
       <span id="cal-title">📅 行程表</span>
+      <div id="view-toggle"><button class="vt on" id="vt-list" onclick="setCalMode('list')">📋 リスト</button><button class="vt" id="vt-time" onclick="setCalMode('time')">🕐 タイム</button></div>
       <div id="cal-head-ctrls">
         <label id="ph-all"><input type="checkbox" id="chk-all-days" checked onchange="toggleAllDays(this.checked)">全日表示</label>
         <label id="ph-dotonly"><input type="checkbox" id="chk-dot-only" onchange="toggleDotOnly(this.checked)">未達/直線のみ</label>
@@ -264,6 +293,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0712-1  ★0712-1: (1)Googleカレンダー風タイム表示を追加（0-24時グリッド・所要時間=縦幅・リスト⇄タイム切替・地図連動）
+//   (2)スマホ横画面の崩れを修正（縦積み+vh固定を廃止し左右分割へ。#panelを常時flex列化し#calendar-bodyを唯一のスクローラに）
+//   (3)縦画面シートを 1行(mini)/1/3(third)/全画面(full) の3段に再定義（初期=1/3）。ドラッグ面をつまみ+見出しへ拡大、
+//      html/bodyにoverscroll-behavior:noneでpull-to-refresh抑止。タップ段送りはつまみ/タイトルのみ。
 // rail_trip_map 0617-3  ★0617-3: 縦画面でシートが地図の下に隠れる問題を修正。#mapにz-index:0を付与し重なりコンテキストを生成、Leafletペイン(z200-700)を#map内に閉じ込めて #map(0)<#panel(30)<#det(40) の順に。
 // rail_trip_map 0617-2  ★0617-2: スマホ縦画面ボトムシートの高さ解決を % → 実px/dvh化（初期peekで約3行表示／half・full切替を修正）。以下は旧版メモ:
 // rail_trip_map 0613-8
@@ -1730,8 +1763,8 @@ function initMapAndUI(){
 // モバイル縦画面：行程表ボトムシート（下から上にスライド／高さ切替）
 // 縦画面のみ有効。つまみをタップで peek→half→full を巡回、ドラッグで任意の高さ→近い段にスナップ。
 // =====================================================================
-const SHEET_STATES=[ {key:'peek'}, {key:'half'}, {key:'full'} ];
-let sheetIdx=0;  // 既定=peek（初期表示で約3行のぞかせる。タップで half→full→peek と巡回）
+const SHEET_STATES=[ {key:'mini'}, {key:'third'}, {key:'full'} ];
+let sheetIdx=1;  // 既定=1/3。つまみ/タイトルのタップで 1/3→全画面→1行→1/3 と巡回
 function isPortraitPhone(){
   return window.matchMedia('(max-width:768px) and (orientation:portrait)').matches;
 }
@@ -1741,13 +1774,14 @@ function sheetMaxH(){
   if(m){ const h=m.getBoundingClientRect().height; if(h>0) return h; }
   return (window.visualViewport ? window.visualViewport.height : window.innerHeight);
 }
-// peek＝つまみ＋見出し＋約3行ぶんの固定高さ。端末差に依存せず最低限の中身を必ず見せる。
-function peekH(){ return Math.min(230, Math.round(sheetMaxH()*0.9)); }
+// mini＝つまみ＋パネル見出し＋約1行。third＝地図エリアの1/3。full＝全画面。
+function calHeadH(){ const h=document.getElementById('cal-head'); const v=h?h.getBoundingClientRect().height:0; return v>0?Math.ceil(v):44; }
 // 各段の高さ(px)。% を使わず実pxで確定指定し、#calendar-body{flex:1} が0pxに潰れないようにする。
 function stateH(idx){
-  const max=sheetMaxH(), peek=peekH(), k=SHEET_STATES[idx].key;
-  if(k==='peek') return peek;
-  if(k==='half') return Math.max(Math.round(max*0.55), peek+72); // peekと必ず差をつける
+  const max=sheetMaxH(), k=SHEET_STATES[idx].key;
+  const mini=Math.min(22+calHeadH()+34, Math.round(max*0.35)); // つまみ22px+見出し+1行分
+  if(k==='mini') return mini;
+  if(k==='third') return Math.max(Math.round(max/3), mini+40); // miniと必ず差をつける
   return max; // full=#mainを満たす（アプリのヘッダーは残す）
 }
 function applySheet(){
@@ -1760,22 +1794,29 @@ function cycleSheet(){ sheetIdx=(sheetIdx+1)%SHEET_STATES.length; applySheet(); 
 function initSheetDrag(){
   const handle=document.getElementById('sheet-handle');
   const panel=document.getElementById('panel');
+  const head=document.getElementById('cal-head');
   if(!handle||!panel) return;
-  let startY=0,startH=0,dragging=false,moved=false;
-  const onStart=y=>{ if(!isPortraitPhone())return; dragging=true;moved=false;startY=y;
+  let startY=0,startH=0,dragging=false,moved=false,startEl=null;
+  const onStart=(y,tgt)=>{ if(!isPortraitPhone())return; dragging=true;moved=false;startY=y;startEl=tgt;
     startH=panel.getBoundingClientRect().height; panel.classList.add('dragging'); };
   const onMove=y=>{ if(!dragging)return; const dy=startY-y; if(Math.abs(dy)>4)moved=true;
-    const max=sheetMaxH(); let h=startH+dy; h=Math.max(80,Math.min(max,h));
+    const max=sheetMaxH(); let h=startH+dy; h=Math.max(60,Math.min(max,h));
     panel.style.setProperty('--sheet-h',h+'px'); };
   const onEnd=()=>{ if(!dragging)return; dragging=false; panel.classList.remove('dragging');
-    if(!moved){ cycleSheet(); return; }                 // 動かさなければタップ＝段送り
-    const curH=panel.getBoundingClientRect().height;    // 現在高さに最も近い段へスナップ
+    if(!moved){                                        // 動かさなければタップ
+      const okTap=startEl && startEl.closest && startEl.closest('#sheet-handle, #cal-title');
+      if(okTap) cycleSheet(); else applySheet();       // 段送りはつまみ/タイトルのみ（チェック等の操作は妨げない）
+      return; }
+    const curH=panel.getBoundingClientRect().height;   // 現在高さに最も近い段へスナップ
     let best=0,bd=1e9; SHEET_STATES.forEach((s,i)=>{const d=Math.abs(stateH(i)-curH); if(d<bd){bd=d;best=i;}});
     sheetIdx=best; applySheet(); };
-  handle.addEventListener('touchstart',e=>onStart(e.touches[0].clientY),{passive:true});
-  handle.addEventListener('touchmove',e=>{ onMove(e.touches[0].clientY); if(dragging&&moved)e.preventDefault(); },{passive:false});
-  handle.addEventListener('touchend',onEnd);
-  handle.addEventListener('mousedown',e=>{ onStart(e.clientY); e.preventDefault(); });
+  const bind=surf=>{
+    surf.addEventListener('touchstart',e=>onStart(e.touches[0].clientY,e.target),{passive:true});
+    surf.addEventListener('touchmove',e=>{ onMove(e.touches[0].clientY); if(dragging&&moved)e.preventDefault(); },{passive:false});
+    surf.addEventListener('touchend',onEnd);
+    surf.addEventListener('mousedown',e=>{ onStart(e.clientY,e.target); if(isPortraitPhone())e.preventDefault(); });
+  };
+  bind(handle); if(head) bind(head);                   // つまみ＋見出しをドラッグ面に（掴みやすく）
   window.addEventListener('mousemove',e=>onMove(e.clientY));
   window.addEventListener('mouseup',onEnd);
   window.addEventListener('orientationchange',()=>setTimeout(applySheet,250));
@@ -1902,6 +1943,8 @@ function selectSeg(di,si){
   catch(e){ map.fitBounds(pl.getBounds(),{padding:[50,50]}); }
   const row=document.getElementById(`r-${di}-${si}`);
   if(row){row.classList.add('active');row.scrollIntoView({block:'nearest'});activeRow=row;}
+  const tb=document.getElementById(`tg-${di}-${si}`);
+  if(tb){tb.classList.add('active');tb.scrollIntoView({block:'nearest',inline:'nearest'});activeRow=tb;}
   const seg=SEGS.find(s=>s.di===di&&s.si===si);
   if(seg)showDet(seg);
 }
@@ -1941,9 +1984,104 @@ function calDurMin(dep, arr){
 // 移動時間(分) → "X時間Y分"/"Y分"。0や不明は空文字。
 function fmtDur(mins){ if(!mins||mins<=0) return ''; const h=Math.floor(mins/60), m=mins%60; return h>0?(m>0?`${h}時間${m}分`:`${h}時間`):`${m}分`; }
 
+let CAL_MODE='list';   // 'list' | 'time'
+function setCalMode(m){
+  if(CAL_MODE===m) return;
+  CAL_MODE=m;
+  const bl=document.getElementById('vt-list'), bt=document.getElementById('vt-time');
+  if(bl) bl.classList.toggle('on', m==='list');
+  if(bt) bt.classList.toggle('on', m==='time');
+  renderCalendarView();
+}
 function renderCalendarView(){
   const cal=document.getElementById('calendar-body');
   if(!cal || !Array.isArray(SEGS) || !SEGS.length) return;
+  cal.classList.toggle('time-mode', CAL_MODE==='time');
+  if(CAL_MODE==='time'){ renderTimeGrid(cal); return; }
+  renderListView(cal);
+}
+
+// ===== タイム表示（Googleカレンダー風）。0:00-24:00 の縦軸に、各区間を dep→arr の位置・縦幅のブロックで置く =====
+// 1時間=44px / 日ヘッダ=30px（CSS .tg-hour/.tg-col/.tg-day-head と対応）。クリックで selectSeg（リストと同じ地図連動）。
+function renderTimeGrid(cal){
+  const HOUR=44;
+  const pMin=s=>{ const m=/^(\d{1,2}):(\d{2})$/.exec((s||'').trim()); return m?(+m[1])*60+(+m[2]):null; };
+  cal.innerHTML='';
+  const el=(t,c)=>{ const e=document.createElement(t); if(c) e.className=c; return e; };
+  const wrap=el('div','tg-scroll');
+  const ax=el('div','tg-axis');
+  ax.appendChild(el('div','tg-corner'));
+  for(let h=0;h<24;h++){ const hv=el('div','tg-hour'); hv.textContent=h+':00'; ax.appendChild(hv); }
+  wrap.appendChild(ax);
+  const byDay=new Map();
+  for(const s of SEGS){ (byDay.get(s.di)||byDay.set(s.di,[]).get(s.di)).push(s); }
+  const days=[...byDay.keys()].sort((a,b)=>a-b);
+  let firstMin=24*60;
+  days.forEach(di=>{
+    const segs=byDay.get(di).slice().sort((a,b)=>a.si-b.si);
+    const day=el('div','tg-day');
+    const head=el('div','tg-day-head');
+    const chk=document.createElement('input'); chk.type='checkbox'; chk.id='chk-day-'+di;
+    chk.checked=DAY_VISIBLE[di]!==false; chk.onchange=()=>toggleDay(di,chk.checked);
+    const lb=document.createElement('span'); lb.textContent=DAY_LABELS[di]||('Day '+(di+1));
+    lb.onclick=()=>{ chk.checked=!chk.checked; toggleDay(di,chk.checked); };
+    head.appendChild(chk); head.appendChild(lb); day.appendChild(head);
+    const col=el('div','tg-col');
+    // 区間→ブロック（時間が重なる場合はレーン分割で横に並べる）
+    const items=[];
+    for(const s of segs){
+      const a=pMin(s.dep); if(a==null) continue;
+      let b=pMin(s.arr); if(b==null||b<=a) b=a+1;      // 欠損/同時刻は最小1分
+      items.push({s, a, b:Math.min(b,1440)});
+      if(a<firstMin) firstMin=a;
+    }
+    items.sort((x,y)=>x.a-y.a||x.b-y.b);
+    let cluster=[], clusterEnd=-1;
+    const flush=()=>{ if(!cluster.length) return;
+      const laneEnd=[];
+      for(const it of cluster){
+        let l=laneEnd.findIndex(e=>e<=it.a);
+        if(l<0){ l=laneEnd.length; laneEnd.push(0); }
+        laneEnd[l]=it.b; it.lane=l;
+      }
+      for(const it of cluster) it.lanes=laneEnd.length;
+      cluster=[];
+    };
+    for(const it of items){
+      if(it.a>=clusterEnd){ flush(); clusterEnd=it.b; }
+      else clusterEnd=Math.max(clusterEnd,it.b);
+      cluster.push(it);
+    }
+    flush();
+    for(const it of items){
+      const {s,a,b,lane,lanes}=it;
+      const t=T[s.type]||{color:'#9e9e9e'};
+      const durPx=(b-a)/60*HOUR;
+      const block=el('div','tg-block'+(durPx<26?' tiny':''));
+      block.id=`tg-${s.di}-${s.si}`;
+      block.style.top=(a/60*HOUR)+'px';
+      block.style.height=Math.max(durPx,12)+'px';
+      const w=100/lanes;
+      block.style.left=`calc(${lane*w}% + 2px)`;
+      block.style.width=`calc(${w}% - 5px)`;
+      block.style.borderLeftColor=t.color;
+      block.style.background=calTint(t.color);
+      const tm=el('div','tb-time'); tm.textContent=`${s.dep}–${s.arr}`;
+      const nm=el('div','tb-name'); nm.style.color=t.color; nm.textContent=s.name;
+      block.appendChild(tm); block.appendChild(nm);
+      block.title=`${s.dep}–${s.arr} ${s.name}`;
+      block.onclick=()=>selectSeg(s.di,s.si);
+      col.appendChild(block);
+    }
+    day.appendChild(col);
+    wrap.appendChild(day);
+  });
+  cal.appendChild(wrap);
+  // 最初の行程の少し上へ自動スクロール
+  cal.scrollTop=Math.max(0, ((firstMin===24*60?8*60:firstMin)/60)*HOUR-36);
+}
+
+function renderListView(cal){
   cal.innerHTML='';
 
   const el=(tag,cls)=>{ const e=document.createElement(tag); if(cls) e.className=cls; return e; };
