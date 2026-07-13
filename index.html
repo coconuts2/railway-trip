@@ -129,23 +129,30 @@ html,body{overscroll-behavior:none;} /* pull-to-refresh抑止（シート下ド�
 .cal-edge-name{font-size:11px;font-weight:700;line-height:1.35;}
 .cal-edge-dur{font-size:9px;color:#888;font-weight:normal;flex-shrink:0;white-space:nowrap;}
 .cal-edge-note{font-size:10px;margin-top:2px;line-height:1.4;color:#c0392b;font-weight:600;}
+/* ===== パネル幅リサイザ（PC/タブレット。地図との境界をドラッグ） ===== */
+#panel-resizer{width:6px;flex-shrink:0;cursor:col-resize;background:transparent;z-index:5;}
+#panel-resizer:hover,body.col-resizing #panel-resizer{background:#d8d6f0;}
+body.col-resizing{user-select:none;cursor:col-resize;}
+@media (max-width:768px){#panel-resizer{display:none;}}
 /* ===== 表示切替（リスト⇄タイム） ===== */
 #view-toggle{display:flex;flex-shrink:0;}
 .vt{border:1px solid #d6d6de;background:#fff;font-size:10px;padding:3px 8px;cursor:pointer;color:#666;line-height:1;}
 .vt:first-child{border-radius:6px 0 0 6px;}
 .vt:last-child{border-radius:0 6px 6px 0;margin-left:-1px;}
 .vt.on{background:#534AB7;border-color:#534AB7;color:#fff;}
-/* ===== タイム表示（Googleカレンダー風 0:00-24:00 縦グリッド。1時間=44px, 日ヘッダ=30px と JSの定数が対応） ===== */
+#tg-zoom{display:none;flex-shrink:0;}
+#tg-zoom .vt{min-width:26px;padding:3px 6px;}
+/* ===== タイム表示（Googleカレンダー風 0:00-24:00 縦グリッド。1時間=var(--tg-hour)（JSのTG_HOURが設定・ズーム可変）、日ヘッダ=30px ===== */
 #calendar-body.time-mode{padding:0;background:#fff;}
 .tg-scroll{display:flex;min-width:max-content;}
 .tg-axis{position:sticky;left:0;z-index:5;width:36px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;}
 .tg-corner{position:sticky;top:0;z-index:6;height:30px;background:#fff;border-bottom:1px solid #dfe0e8;}
-.tg-hour{height:44px;font-size:9px;color:#98a;text-align:right;padding-right:5px;transform:translateY(-6px);}
+.tg-hour{height:var(--tg-hour,44px);font-size:9px;color:#98a;text-align:right;padding-right:5px;transform:translateY(-6px);}
 .tg-day{width:150px;flex-shrink:0;border-right:1px solid #ececf2;}
 .tg-day-head{position:sticky;top:0;z-index:4;height:30px;display:flex;align-items:center;gap:5px;padding:0 7px;background:#eef4ee;border-bottom:1px solid #dfe6df;font-size:10px;font-weight:700;color:#2e5d3e;white-space:nowrap;overflow:hidden;}
 .tg-day-head input{margin:0;flex-shrink:0;accent-color:#2e5d3e;cursor:pointer;}
 .tg-day-head span{cursor:pointer;overflow:hidden;text-overflow:ellipsis;}
-.tg-col{position:relative;height:1056px;background:repeating-linear-gradient(to bottom,transparent 0,transparent 43px,#eef0f4 43px,#eef0f4 44px);}
+.tg-col{position:relative;height:calc(var(--tg-hour,44px)*24);background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(var(--tg-hour,44px) - 1px),#eef0f4 calc(var(--tg-hour,44px) - 1px),#eef0f4 var(--tg-hour,44px));}
 .tg-block{position:absolute;border-left:3px solid #9e9e9e;border-radius:4px;padding:2px 4px;font-size:9px;overflow:hidden;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.05);}
 .tg-block .tb-time{font-size:8px;color:#66708a;line-height:1.2;white-space:nowrap;}
 .tg-block .tb-name{font-weight:700;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
@@ -246,11 +253,13 @@ html,body{overscroll-behavior:none;} /* pull-to-refresh抑止（シート下ド�
 </div>
 <div id="main">
   <div id="map"></div>
+  <div id="panel-resizer"></div>
   <div id="panel">
     <div id="sheet-handle"><div class="sheet-grip"></div></div>
     <div id="cal-head">
       <span id="cal-title">📅 行程表</span>
       <div id="view-toggle"><button class="vt on" id="vt-list" onclick="setCalMode('list')">📋 リスト</button><button class="vt" id="vt-time" onclick="setCalMode('time')">🕐 タイム</button></div>
+      <div id="tg-zoom"><button class="vt" onclick="tgZoom(0.8)" title="時間軸を縮小">－</button><button class="vt" onclick="tgZoom(1.25)" title="時間軸を拡大">＋</button></div>
       <div id="cal-head-ctrls">
         <label id="ph-all"><input type="checkbox" id="chk-all-days" checked onchange="toggleAllDays(this.checked)">全日表示</label>
         <label id="ph-dotonly"><input type="checkbox" id="chk-dot-only" onchange="toggleDotOnly(this.checked)">未達/直線のみ</label>
@@ -293,6 +302,8 @@ html,body{overscroll-behavior:none;} /* pull-to-refresh抑止（シート下ド�
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0712-2  ★0712-2: (1)PC/タブレットでパネル幅をドラッグリサイズ可能に（#panel-resizer・localStorage保存・地図はinvalidateSizeで追従・縦画面では自動解除）
+//   (2)タイム表示に時間軸ズーム（－/＋、TG_HOUR=24〜160px/時、CSS --tg-hour連動。フレームは固定のまま目盛とブロックだけ拡縮、画面中央の時刻を維持）
 // rail_trip_map 0712-1  ★0712-1: (1)Googleカレンダー風タイム表示を追加（0-24時グリッド・所要時間=縦幅・リスト⇄タイム切替・地図連動）
 //   (2)スマホ横画面の崩れを修正（縦積み+vh固定を廃止し左右分割へ。#panelを常時flex列化し#calendar-bodyを唯一のスクローラに）
 //   (3)縦画面シートを 1行(mini)/1/3(third)/全画面(full) の3段に再定義（初期=1/3）。ドラッグ面をつまみ+見出しへ拡大、
@@ -1756,6 +1767,7 @@ function initMapAndUI(){
   buildLegend();
   initSheetDrag();
   applySheet();
+  initPanelResize();
   loadAll();
 }
 
@@ -1821,6 +1833,40 @@ function initSheetDrag(){
   window.addEventListener('mouseup',onEnd);
   window.addEventListener('orientationchange',()=>setTimeout(applySheet,250));
   window.addEventListener('resize',applySheet);
+}
+// ===== PC/タブレット: パネル幅のドラッグリサイズ（地図との境界#panel-resizer） =====
+// 220px〜画面幅70%でクランプし localStorage(rtm_panelW) に保存。縦画面シート時はインライン幅を解除して非干渉。
+function initPanelResize(){
+  const rz=document.getElementById('panel-resizer');
+  const panel=document.getElementById('panel');
+  const main=document.getElementById('main');
+  if(!rz||!panel||!main) return;
+  let PANEL_W=0;
+  try{ PANEL_W=parseInt(localStorage.getItem('rtm_panelW')||'0',10)||0; }catch(e){}
+  let lastInv=0;
+  const inval=final=>{ if(!map) return; const now=Date.now();
+    if(final || now-lastInv>80){ lastInv=now; try{ map.invalidateSize({pan:false}); }catch(e){} } };
+  const apply=px=>{
+    const maxW=Math.max(260, Math.round(window.innerWidth*0.7));
+    px=Math.round(Math.min(maxW, Math.max(220, px)));
+    panel.style.width=px+'px'; panel.style.minWidth=px+'px';
+    PANEL_W=px; inval(false); return px;
+  };
+  const sync=()=>{ if(isPortraitPhone()){ panel.style.removeProperty('width'); panel.style.removeProperty('min-width'); }
+                   else if(PANEL_W) apply(PANEL_W); };
+  sync();
+  const save=()=>{ try{ localStorage.setItem('rtm_panelW', String(PANEL_W)); }catch(e){} };
+  const fromX=x=> main.getBoundingClientRect().right - x;
+  let dragging=false;
+  rz.addEventListener('mousedown',e=>{ dragging=true; document.body.classList.add('col-resizing'); e.preventDefault(); });
+  window.addEventListener('mousemove',e=>{ if(dragging) apply(fromX(e.clientX)); });
+  window.addEventListener('mouseup',()=>{ if(!dragging)return; dragging=false;
+    document.body.classList.remove('col-resizing'); save(); inval(true); });
+  rz.addEventListener('touchstart',()=>{ dragging=true; },{passive:true});
+  rz.addEventListener('touchmove',e=>{ if(dragging){ apply(fromX(e.touches[0].clientX)); e.preventDefault(); } },{passive:false});
+  rz.addEventListener('touchend',()=>{ if(!dragging)return; dragging=false; save(); inval(true); });
+  window.addEventListener('resize',sync);
+  window.addEventListener('orientationchange',()=>setTimeout(sync,250));
 }
 
 // 乗降駅の○（白丸＋濃グレー縁）。専用pane(stationPane)で路線の上に描画。クリックは透過。
@@ -1985,12 +2031,16 @@ function calDurMin(dep, arr){
 function fmtDur(mins){ if(!mins||mins<=0) return ''; const h=Math.floor(mins/60), m=mins%60; return h>0?(m>0?`${h}時間${m}分`:`${h}時間`):`${m}分`; }
 
 let CAL_MODE='list';   // 'list' | 'time'
+let TG_HOUR=44;        // タイム表示の1時間あたりpx（－/＋で可変。CSS --tg-hour と連動）
+const TG_HOUR_MIN=24, TG_HOUR_MAX=160;
 function setCalMode(m){
   if(CAL_MODE===m) return;
   CAL_MODE=m;
   const bl=document.getElementById('vt-list'), bt=document.getElementById('vt-time');
   if(bl) bl.classList.toggle('on', m==='list');
   if(bt) bt.classList.toggle('on', m==='time');
+  const z=document.getElementById('tg-zoom');
+  if(z) z.style.display = (m==='time') ? 'flex' : 'none';
   renderCalendarView();
 }
 function renderCalendarView(){
@@ -2003,8 +2053,9 @@ function renderCalendarView(){
 
 // ===== タイム表示（Googleカレンダー風）。0:00-24:00 の縦軸に、各区間を dep→arr の位置・縦幅のブロックで置く =====
 // 1時間=44px / 日ヘッダ=30px（CSS .tg-hour/.tg-col/.tg-day-head と対応）。クリックで selectSeg（リストと同じ地図連動）。
-function renderTimeGrid(cal){
-  const HOUR=44;
+function renderTimeGrid(cal, noAutoScroll){
+  const HOUR=TG_HOUR;
+  cal.style.setProperty('--tg-hour', HOUR+'px');
   const pMin=s=>{ const m=/^(\d{1,2}):(\d{2})$/.exec((s||'').trim()); return m?(+m[1])*60+(+m[2]):null; };
   cal.innerHTML='';
   const el=(t,c)=>{ const e=document.createElement(t); if(c) e.className=c; return e; };
@@ -2077,8 +2128,24 @@ function renderTimeGrid(cal){
     wrap.appendChild(day);
   });
   cal.appendChild(wrap);
-  // 最初の行程の少し上へ自動スクロール
-  cal.scrollTop=Math.max(0, ((firstMin===24*60?8*60:firstMin)/60)*HOUR-36);
+  if(!noAutoScroll){
+    // 最初の行程の少し上へ自動スクロール（ズーム時は呼び元が中央時刻を維持するためスキップ）
+    cal.scrollTop=Math.max(0, ((firstMin===24*60?8*60:firstMin)/60)*HOUR-36);
+  }
+}
+
+// タイム表示の拡大/縮小。フレーム（日付ヘッダ・時間軸の構造）は保ち、1時間あたりのpxだけ変える。
+// ズーム前後で「画面中央に見えている時刻」を維持するようスクロール位置を補正する。
+function tgZoom(f){
+  if(CAL_MODE!=='time') return;
+  const cal=document.getElementById('calendar-body'); if(!cal) return;
+  const old=TG_HOUR;
+  TG_HOUR=Math.round(Math.min(TG_HOUR_MAX, Math.max(TG_HOUR_MIN, TG_HOUR*f)));
+  if(TG_HOUR===old) return;
+  const headH=30;  // .tg-day-head の高さ
+  const centerMin=Math.max(0,(cal.scrollTop + cal.clientHeight/2 - headH))/old*60;
+  renderTimeGrid(cal, true);
+  cal.scrollTop=Math.max(0, centerMin/60*TG_HOUR - cal.clientHeight/2 + headH);
 }
 
 function renderListView(cal){
