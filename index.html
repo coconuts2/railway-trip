@@ -8,7 +8,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
-html,body{overscroll-behavior:none;} /* pull-to-refresh抑止（シート下ドラッグと衝突するため） */
+html,body{overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%;} /* pull-to-refresh抑止＋横向き時のフォント自動拡大を無効化（時間軸の時刻見切れ防止） */
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
 #header{padding:7px 14px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
 #header h1{font-size:13px;font-weight:600;color:#222;}
@@ -130,10 +130,12 @@ html,body{overscroll-behavior:none;} /* pull-to-refresh抑止（シート下ド�
 .cal-edge-dur{font-size:9px;color:#888;font-weight:normal;flex-shrink:0;white-space:nowrap;}
 .cal-edge-note{font-size:10px;margin-top:2px;line-height:1.4;color:#c0392b;font-weight:600;}
 /* ===== パネル幅リサイザ（PC/タブレット。地図との境界をドラッグ） ===== */
-#panel-resizer{width:6px;flex-shrink:0;cursor:col-resize;background:transparent;z-index:5;}
+#panel-resizer{position:relative;width:6px;flex-shrink:0;cursor:col-resize;background:transparent;z-index:5;}
+#panel-resizer::after{content:'';position:absolute;left:2px;top:50%;transform:translateY(-50%);width:2px;height:30px;border-radius:2px;background:#cfcfda;}
 #panel-resizer:hover,body.col-resizing #panel-resizer{background:#d8d6f0;}
 body.col-resizing{user-select:none;cursor:col-resize;}
-@media (max-width:768px){#panel-resizer{display:none;}}
+@media (max-width:768px) and (orientation:portrait){#panel-resizer{display:none;}} /* 縦画面シート時のみ非表示（横画面では使用可） */
+@media (pointer:coarse){#panel-resizer{width:16px;margin-left:-10px;}#panel-resizer::after{left:12px;}} /* タッチは当たり判定を拡大（レイアウト幅は6pxのまま地図側に重ねる） */
 /* ===== 表示切替（リスト⇄タイム） ===== */
 #view-toggle{display:flex;flex-shrink:0;}
 .vt{border:1px solid #d6d6de;background:#fff;font-size:10px;padding:3px 8px;cursor:pointer;color:#666;line-height:1;}
@@ -141,11 +143,11 @@ body.col-resizing{user-select:none;cursor:col-resize;}
 .vt:last-child{border-radius:0 6px 6px 0;margin-left:-1px;}
 .vt.on{background:#534AB7;border-color:#534AB7;color:#fff;}
 #tg-zoom{display:none;flex-shrink:0;}
-#tg-zoom .vt{min-width:26px;padding:3px 6px;}
+#tg-zoom .vt{min-width:30px;padding:3px 9px;font-size:12px;font-weight:700;}
 /* ===== タイム表示（Googleカレンダー風 0:00-24:00 縦グリッド。1時間=var(--tg-hour)（JSのTG_HOURが設定・ズーム可変）、日ヘッダ=30px ===== */
 #calendar-body.time-mode{padding:0;background:#fff;}
 .tg-scroll{display:flex;min-width:max-content;}
-.tg-axis{position:sticky;left:0;z-index:5;width:36px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;}
+.tg-axis{position:sticky;left:0;z-index:5;width:40px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;}
 .tg-corner{position:sticky;top:0;z-index:6;height:30px;background:#fff;border-bottom:1px solid #dfe0e8;}
 .tg-hour{height:var(--tg-hour,44px);font-size:9px;color:#98a;text-align:right;padding-right:5px;transform:translateY(-6px);}
 .tg-day{width:150px;flex-shrink:0;border-right:1px solid #ececf2;}
@@ -173,7 +175,7 @@ body.col-resizing{user-select:none;cursor:col-resize;}
   #header{padding:4px 10px;gap:6px;}
   #header h1{font-size:12px;}
   .hbtn{padding:2px 7px;}
-  #panel{width:min(300px,42vw);min-width:230px;}
+  #panel{width:min(330px,46vw);min-width:250px;}
   #det{width:min(340px,55vw);height:100%;border-radius:12px 0 0 0;}
 }
 /* タッチ端末でホバー前提のUIが固まらないように */
@@ -302,6 +304,8 @@ body.col-resizing{user-select:none;cursor:col-resize;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0712-3  ★0712-3: (1)横向きの時刻見切れ修正: text-size-adjust:100%でフォント自動拡大を無効化＋時間軸36→40px＋横画面パネル幅min(330px,46vw)＋横画面でもリサイザ使用可(タッチは当たり判定16px・可視グリップ追加)
+//   (2)ズーム操作性: 縦画面シートのドラッグ面から操作要素(button/input/label)を除外しタップのclick消失を修正。ピンチ(スマホ)とCtrl/⌘+ホイール(PC)のズームを追加(アンカー時刻固定・tgSetHour共通化)。±ボタン拡大。
 // rail_trip_map 0712-2  ★0712-2: (1)PC/タブレットでパネル幅をドラッグリサイズ可能に（#panel-resizer・localStorage保存・地図はinvalidateSizeで追従・縦画面では自動解除）
 //   (2)タイム表示に時間軸ズーム（－/＋、TG_HOUR=24〜160px/時、CSS --tg-hour連動。フレームは固定のまま目盛とブロックだけ拡縮、画面中央の時刻を維持）
 // rail_trip_map 0712-1  ★0712-1: (1)Googleカレンダー風タイム表示を追加（0-24時グリッド・所要時間=縦幅・リスト⇄タイム切替・地図連動）
@@ -1768,6 +1772,7 @@ function initMapAndUI(){
   initSheetDrag();
   applySheet();
   initPanelResize();
+  initTgZoomGestures();
   loadAll();
 }
 
@@ -1809,7 +1814,9 @@ function initSheetDrag(){
   const head=document.getElementById('cal-head');
   if(!handle||!panel) return;
   let startY=0,startH=0,dragging=false,moved=false,startEl=null;
-  const onStart=(y,tgt)=>{ if(!isPortraitPhone())return; dragging=true;moved=false;startY=y;startEl=tgt;
+  const onStart=(y,tgt)=>{ if(!isPortraitPhone())return;
+    if(tgt && tgt.closest && tgt.closest('button,input,select,label')) return; // 操作要素のタップを奪わない（ズーム±や☑のclickがpreventDefaultで消えるのを防ぐ）
+    dragging=true;moved=false;startY=y;startEl=tgt;
     startH=panel.getBoundingClientRect().height; panel.classList.add('dragging'); };
   const onMove=y=>{ if(!dragging)return; const dy=startY-y; if(Math.abs(dy)>4)moved=true;
     const max=sheetMaxH(); let h=startH+dy; h=Math.max(60,Math.min(max,h));
@@ -2134,18 +2141,56 @@ function renderTimeGrid(cal, noAutoScroll){
   }
 }
 
-// タイム表示の拡大/縮小。フレーム（日付ヘッダ・時間軸の構造）は保ち、1時間あたりのpxだけ変える。
-// ズーム前後で「画面中央に見えている時刻」を維持するようスクロール位置を補正する。
-function tgZoom(f){
+// タイム表示の拡大/縮小の共通処理。newHourPxにクランプを適用し、anchorY（#calendar-body内のy座標px、
+// nullなら画面中央）に見えている時刻を保ったまま再描画する。フレーム（日付ヘッダ・時間軸の構造）は不変。
+function tgSetHour(newHourPx, anchorY){
   if(CAL_MODE!=='time') return;
   const cal=document.getElementById('calendar-body'); if(!cal) return;
   const old=TG_HOUR;
-  TG_HOUR=Math.round(Math.min(TG_HOUR_MAX, Math.max(TG_HOUR_MIN, TG_HOUR*f)));
+  TG_HOUR=Math.round(Math.min(TG_HOUR_MAX, Math.max(TG_HOUR_MIN, newHourPx)));
   if(TG_HOUR===old) return;
   const headH=30;  // .tg-day-head の高さ
-  const centerMin=Math.max(0,(cal.scrollTop + cal.clientHeight/2 - headH))/old*60;
+  if(anchorY==null) anchorY=cal.clientHeight/2;
+  const centerMin=Math.max(0,(cal.scrollTop + anchorY - headH))/old*60;
   renderTimeGrid(cal, true);
-  cal.scrollTop=Math.max(0, centerMin/60*TG_HOUR - cal.clientHeight/2 + headH);
+  cal.scrollTop=Math.max(0, centerMin/60*TG_HOUR - anchorY + headH);
+}
+function tgZoom(f){ tgSetHour(TG_HOUR*f, null); }
+
+// ===== タイム表示のズームジェスチャ：ピンチ（スマホ）／ Ctrl・⌘+ホイール（PC） =====
+// ピンチ中はアンカー時刻（2本指の中点に見えている時刻）を固定したままrAFで再描画する。
+function initTgZoomGestures(){
+  const cal=document.getElementById('calendar-body');
+  if(!cal) return;
+  let pinch=null;  // {d0,tg0,anchorY,centerMin}
+  const dist=t=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  cal.addEventListener('touchstart',e=>{
+    if(CAL_MODE!=='time'||e.touches.length!==2) return;
+    const y=(e.touches[0].clientY+e.touches[1].clientY)/2 - cal.getBoundingClientRect().top;
+    pinch={d0:dist(e.touches), tg0:TG_HOUR, anchorY:y,
+           centerMin:Math.max(0,(cal.scrollTop + y - 30))/TG_HOUR*60};
+    e.preventDefault();
+  },{passive:false});
+  let raf=0;
+  cal.addEventListener('touchmove',e=>{
+    if(!pinch||e.touches.length!==2) return;
+    e.preventDefault();
+    const want=Math.round(Math.min(TG_HOUR_MAX, Math.max(TG_HOUR_MIN, pinch.tg0*dist(e.touches)/pinch.d0)));
+    if(want===TG_HOUR||raf) return;
+    raf=requestAnimationFrame(()=>{ raf=0;
+      TG_HOUR=want; renderTimeGrid(cal, true);
+      cal.scrollTop=Math.max(0, pinch.centerMin/60*TG_HOUR - pinch.anchorY + 30);
+    });
+  },{passive:false});
+  const endPinch=()=>{ pinch=null; };
+  cal.addEventListener('touchend',endPinch);
+  cal.addEventListener('touchcancel',endPinch);
+  cal.addEventListener('wheel',e=>{
+    if(CAL_MODE!=='time'||!(e.ctrlKey||e.metaKey)) return;
+    e.preventDefault();
+    const y=e.clientY - cal.getBoundingClientRect().top;
+    tgSetHour(TG_HOUR*(e.deltaY<0?1.1:1/1.1), y);
+  },{passive:false});
 }
 
 function renderListView(cal){
