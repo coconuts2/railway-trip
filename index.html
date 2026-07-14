@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"><!-- アプリ内ズームがあるためページ自体の拡大は禁止（拡大状態の持ち越しでUI全体が左に欠けるのを防ぐ） -->
 <title>鉄道旅行ルートマップ</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css"/>
 <style>
@@ -135,7 +135,7 @@ html,body{overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjus
 #panel-resizer:hover,body.col-resizing #panel-resizer{background:#d8d6f0;}
 body.col-resizing{user-select:none;cursor:col-resize;}
 @media (max-width:768px) and (orientation:portrait){#panel-resizer{display:none;}} /* 縦画面シート時のみ非表示（横画面では使用可） */
-@media (pointer:coarse){#panel-resizer{width:16px;margin-left:-10px;}#panel-resizer::after{left:12px;}} /* タッチは当たり判定を拡大（レイアウト幅は6pxのまま地図側に重ねる） */
+@media (pointer:coarse){#panel-resizer{width:12px;margin-left:-6px;}#panel-resizer::after{left:8px;}} /* タッチ当たり判定（地図側への重なりは6pxに縮小・誤操作対策） */
 /* ===== 表示切替（リスト⇄タイム） ===== */
 #view-toggle{display:flex;flex-shrink:0;}
 .vt{border:1px solid #d6d6de;background:#fff;font-size:10px;padding:3px 8px;cursor:pointer;color:#666;line-height:1;}
@@ -144,19 +144,24 @@ body.col-resizing{user-select:none;cursor:col-resize;}
 .vt.on{background:#534AB7;border-color:#534AB7;color:#fff;}
 #tg-zoom{display:none;flex-shrink:0;}
 #tg-zoom .vt{min-width:30px;padding:3px 9px;font-size:12px;font-weight:700;}
-/* ===== タイム表示（Googleカレンダー風 0:00-24:00 縦グリッド。1時間=var(--tg-hour)（JSのTG_HOURが設定・ズーム可変）、日ヘッダ=30px ===== */
-#calendar-body.time-mode{padding:0;background:#fff;overflow-x:hidden;} /* 縦スクロール専用（横は.tg-days側） */
-.tg-vwrap{display:flex;align-items:stretch;} /* [時間軸(固定)][日カラム(横スクロール)] の2ペイン。軸は構造上横に流れない */
-.tg-days{flex:1;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;}
-.tg-axis{width:40px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;}
-.tg-corner{position:sticky;top:0;z-index:6;height:30px;background:#fff;border-bottom:1px solid #dfe0e8;}
+/* ===== タイム表示（Googleカレンダー風 0:00-24:00）。フリーズペイン構造:
+   上段=[コーナー|日付ヘッダ行] / 下段=[時間軸|本体]。スクロールは本体(.tg-days)のみで、
+   日付ヘッダ(横)・時間軸(縦)はJSで同期。stickyに依存しないため環境差で消えない。
+   1時間の高さ=var(--tg-hour)。ブロック位置も同変数から算出し、ズームは変数更新のみで再描画不要。 ===== */
+#calendar-body.time-mode{padding:0;background:#fff;overflow:hidden;display:flex;flex-direction:column;}
+.tg-toprow{display:flex;flex-shrink:0;height:30px;background:#fff;border-bottom:1px solid #dfe0e8;}
+.tg-corner{width:40px;flex-shrink:0;border-right:1px solid #e2e2ea;background:#fff;}
+.tg-heads{flex:1;min-width:0;overflow:hidden;display:flex;}
+.tg-dh{width:150px;flex-shrink:0;height:100%;display:flex;align-items:center;gap:5px;padding:0 7px;background:#eef4ee;border-right:1px solid #dfe6df;font-size:10px;font-weight:700;color:#2e5d3e;white-space:nowrap;overflow:hidden;}
+.tg-dh input{margin:0;flex-shrink:0;accent-color:#2e5d3e;cursor:pointer;}
+.tg-dh span{cursor:pointer;overflow:hidden;text-overflow:ellipsis;}
+.tg-body{flex:1;min-height:0;display:flex;}
+.tg-axis{width:40px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;overflow:hidden;}
 .tg-hour{height:var(--tg-hour,44px);font-size:9px;color:#98a;text-align:right;padding-right:5px;transform:translateY(-6px);}
+.tg-days{flex:1;min-width:0;display:flex;align-items:flex-start;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
 .tg-day{width:150px;flex-shrink:0;border-right:1px solid #ececf2;}
-.tg-day-head{position:sticky;top:0;z-index:4;height:30px;display:flex;align-items:center;gap:5px;padding:0 7px;background:#eef4ee;border-bottom:1px solid #dfe6df;font-size:10px;font-weight:700;color:#2e5d3e;white-space:nowrap;overflow:hidden;}
-.tg-day-head input{margin:0;flex-shrink:0;accent-color:#2e5d3e;cursor:pointer;}
-.tg-day-head span{cursor:pointer;overflow:hidden;text-overflow:ellipsis;}
 .tg-col{position:relative;height:calc(var(--tg-hour,44px)*24);background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(var(--tg-hour,44px) - 1px),#eef0f4 calc(var(--tg-hour,44px) - 1px),#eef0f4 var(--tg-hour,44px));}
-.tg-block{position:absolute;border-left:3px solid #9e9e9e;border-radius:4px;padding:2px 4px;font-size:9px;overflow:hidden;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.05);}
+.tg-block{position:absolute;top:calc(var(--tg-hour,44px)*var(--tg-a,0));height:max(12px,calc(var(--tg-hour,44px)*var(--tg-d,0.02)));border-left:3px solid #9e9e9e;border-radius:4px;padding:2px 4px;font-size:9px;overflow:hidden;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.05);}
 .tg-block .tb-time{font-size:8px;color:#66708a;line-height:1.2;white-space:nowrap;}
 .tg-block .tb-name{font-weight:700;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .tg-block.tiny{padding:0 4px;display:flex;align-items:center;}
@@ -305,6 +310,10 @@ body.col-resizing{user-select:none;cursor:col-resize;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0712-5  ★0712-5: (1)タイムグリッドをフリーズペイン化（sticky全廃: 日付ヘッダ横/時間軸縦をJS同期）→0712-4で日付ヘッダが消える退行を修正
+//   (2)viewportメタでページのピンチズーム禁止（拡大状態の持ち越しによるUI全体の左欠け=時間軸・見出しの見切れを根絶）
+//   (3)ズームを非破壊化（CSS変数--tg-hour/--tg-a/--tg-dのみ更新。ピンチ中の再描画でタッチが途切れるバグを解消、160ms後にtinyのみ確定）
+//   (4)リサイザのタッチ誤操作対策（重なり6px化・8px移動で開始・未移動なら保存しない） (5)レイアウト診断を📋ログ/⬇txt保存へ出力
 // rail_trip_map 0712-4  ★0712-4: 横向きで時間軸が消える問題を構造的に解決。タイムグリッドを2ペイン化（時間軸=固定列、日カラムのみ.tg-daysで横スクロール）し
 //   sticky-left依存を廃止。html/bodyにoverflow-x:hidden、モード切替時にpanel/documentのscrollLeftをリセット（見出し・軸の左欠けの根絶）。
 // rail_trip_map 0712-3  ★0712-3: (1)横向きの時刻見切れ修正: text-size-adjust:100%でフォント自動拡大を無効化＋時間軸36→40px＋横画面パネル幅min(330px,46vw)＋横画面でもリサイザ使用可(タッチは当たり判定16px・可視グリップ追加)
@@ -1776,6 +1785,7 @@ function initMapAndUI(){
   applySheet();
   initPanelResize();
   initTgZoomGestures();
+  logLayoutDiag('load');
   loadAll();
 }
 
@@ -1872,9 +1882,13 @@ function initPanelResize(){
   window.addEventListener('mousemove',e=>{ if(dragging) apply(fromX(e.clientX)); });
   window.addEventListener('mouseup',()=>{ if(!dragging)return; dragging=false;
     document.body.classList.remove('col-resizing'); save(); inval(true); });
-  rz.addEventListener('touchstart',()=>{ dragging=true; },{passive:true});
-  rz.addEventListener('touchmove',e=>{ if(dragging){ apply(fromX(e.touches[0].clientX)); e.preventDefault(); } },{passive:false});
-  rz.addEventListener('touchend',()=>{ if(!dragging)return; dragging=false; save(); inval(true); });
+  let touchX0=0,touchMoved=false;
+  rz.addEventListener('touchstart',e=>{ dragging=true; touchMoved=false; touchX0=e.touches[0].clientX; },{passive:true});
+  rz.addEventListener('touchmove',e=>{ if(!dragging) return;
+    const x=e.touches[0].clientX;
+    if(!touchMoved && Math.abs(x-touchX0)<8) return;   // 地図パン等の誤タッチで幅が変わらないよう8px動いてから開始
+    touchMoved=true; apply(fromX(x)); e.preventDefault(); },{passive:false});
+  rz.addEventListener('touchend',()=>{ if(!dragging)return; dragging=false; if(touchMoved){ save(); inval(true); } });
   window.addEventListener('resize',sync);
   window.addEventListener('orientationchange',()=>setTimeout(sync,250));
 }
@@ -2069,29 +2083,37 @@ function renderTimeGrid(cal, noAutoScroll){
   const HOUR=TG_HOUR;
   cal.style.setProperty('--tg-hour', HOUR+'px');
   const pMin=s=>{ const m=/^(\d{1,2}):(\d{2})$/.exec((s||'').trim()); return m?(+m[1])*60+(+m[2]):null; };
+  const prev=cal.querySelector('.tg-days');
+  const keep=prev?{sl:prev.scrollLeft, st:prev.scrollTop}:null;   // 再描画時はスクロール位置を維持
   cal.innerHTML='';
   const el=(t,c)=>{ const e=document.createElement(t); if(c) e.className=c; return e; };
-  const wrap=el('div','tg-vwrap');
+  // 上段: [コーナー][日付ヘッダ行]（ヘッダ行は本体の横スクロールにJS同期）
+  const top=el('div','tg-toprow');
+  top.appendChild(el('div','tg-corner'));
+  const heads=el('div','tg-heads');
+  top.appendChild(heads);
+  // 下段: [時間軸][本体]（時間軸は本体の縦スクロールにJS同期）
+  const body=el('div','tg-body');
   const ax=el('div','tg-axis');
-  ax.appendChild(el('div','tg-corner'));
   for(let h=0;h<24;h++){ const hv=el('div','tg-hour'); hv.textContent=h+':00'; ax.appendChild(hv); }
-  wrap.appendChild(ax);
-  const daysWrap=el('div','tg-days');   // 日カラムの横スクロール領域（時間軸は外側で固定）
+  const days=el('div','tg-days');
+  body.appendChild(ax); body.appendChild(days);
   const byDay=new Map();
   for(const s of SEGS){ (byDay.get(s.di)||byDay.set(s.di,[]).get(s.di)).push(s); }
-  const days=[...byDay.keys()].sort((a,b)=>a-b);
+  const dayKeys=[...byDay.keys()].sort((a,b)=>a-b);
   let firstMin=24*60;
-  days.forEach(di=>{
+  dayKeys.forEach(di=>{
     const segs=byDay.get(di).slice().sort((a,b)=>a.si-b.si);
-    const day=el('div','tg-day');
-    const head=el('div','tg-day-head');
+    // 日付ヘッダ（上段の同期行へ）
+    const head=el('div','tg-dh');
     const chk=document.createElement('input'); chk.type='checkbox'; chk.id='chk-day-'+di;
     chk.checked=DAY_VISIBLE[di]!==false; chk.onchange=()=>toggleDay(di,chk.checked);
     const lb=document.createElement('span'); lb.textContent=DAY_LABELS[di]||('Day '+(di+1));
     lb.onclick=()=>{ chk.checked=!chk.checked; toggleDay(di,chk.checked); };
-    head.appendChild(chk); head.appendChild(lb); day.appendChild(head);
+    head.appendChild(chk); head.appendChild(lb); heads.appendChild(head);
+    // 日カラム
+    const day=el('div','tg-day');
     const col=el('div','tg-col');
-    // 区間→ブロック（時間が重なる場合はレーン分割で横に並べる）
     const items=[];
     for(const s of segs){
       const a=pMin(s.dep); if(a==null) continue;
@@ -2120,11 +2142,11 @@ function renderTimeGrid(cal, noAutoScroll){
     for(const it of items){
       const {s,a,b,lane,lanes}=it;
       const t=T[s.type]||{color:'#9e9e9e'};
-      const durPx=(b-a)/60*HOUR;
+      const durPx=(b-a)/60*HOUR;                        // tiny判定のみpx（描画位置はCSS変数）
       const block=el('div','tg-block'+(durPx<26?' tiny':''));
       block.id=`tg-${s.di}-${s.si}`;
-      block.style.top=(a/60*HOUR)+'px';
-      block.style.height=Math.max(durPx,12)+'px';
+      block.style.setProperty('--tg-a', String(a/60));       // 開始(時間単位)。--tg-hourと乗算され自動スケール
+      block.style.setProperty('--tg-d', String((b-a)/60));   // 長さ(時間単位)
       const w=100/lanes;
       block.style.left=`calc(${lane*w}% + 2px)`;
       block.style.width=`calc(${w}% - 5px)`;
@@ -2138,57 +2160,69 @@ function renderTimeGrid(cal, noAutoScroll){
       col.appendChild(block);
     }
     day.appendChild(col);
-    daysWrap.appendChild(day);
+    days.appendChild(day);
   });
-  wrap.appendChild(daysWrap);
-  cal.appendChild(wrap);
-  cal.scrollLeft=0;  // 念のため（time-modeは横スクロールしない）
+  cal.appendChild(top); cal.appendChild(body);
+  // フリーズペイン同期（本体スクロール→ヘッダ横・時間軸縦）
+  days.addEventListener('scroll',()=>{ heads.scrollLeft=days.scrollLeft; ax.scrollTop=days.scrollTop; },{passive:true});
+  if(keep){ days.scrollLeft=keep.sl; days.scrollTop=keep.st; }
   if(!noAutoScroll){
-    // 最初の行程の少し上へ自動スクロール（ズーム時は呼び元が中央時刻を維持するためスキップ）
-    cal.scrollTop=Math.max(0, ((firstMin===24*60?8*60:firstMin)/60)*HOUR-36);
+    // 最初の行程の少し上へ自動スクロール
+    days.scrollTop=Math.max(0, ((firstMin===24*60?8*60:firstMin)/60)*HOUR-36);
   }
+  heads.scrollLeft=days.scrollLeft; ax.scrollTop=days.scrollTop;
 }
 
-// タイム表示の拡大/縮小の共通処理。newHourPxにクランプを適用し、anchorY（#calendar-body内のy座標px、
-// nullなら画面中央）に見えている時刻を保ったまま再描画する。フレーム（日付ヘッダ・時間軸の構造）は不変。
+let TG_REFINE=0;
+function tgSyncPanes(){
+  const c=document.getElementById('calendar-body'); if(!c) return;
+  const d=c.querySelector('.tg-days'); if(!d) return;
+  const h=c.querySelector('.tg-heads'), a=c.querySelector('.tg-axis');
+  if(h) h.scrollLeft=d.scrollLeft;
+  if(a) a.scrollTop=d.scrollTop;
+}
+// タイム表示の拡大/縮小（非破壊）。CSS変数--tg-hourの更新だけで時間軸・グリッド・ブロックが同時にスケール
+// するため、ピンチ中も再描画せずタッチが途切れない。anchorY（.tg-days内のy px、nullなら中央）の時刻を保つ。
+// tinyクラスの付け替えのみ160ms後に一度だけ再描画で確定（スクロール位置は維持）。
 function tgSetHour(newHourPx, anchorY){
   if(CAL_MODE!=='time') return;
   const cal=document.getElementById('calendar-body'); if(!cal) return;
+  const days=cal.querySelector('.tg-days'); if(!days) return;
   const old=TG_HOUR;
   TG_HOUR=Math.round(Math.min(TG_HOUR_MAX, Math.max(TG_HOUR_MIN, newHourPx)));
   if(TG_HOUR===old) return;
-  const headH=30;  // .tg-day-head の高さ
-  if(anchorY==null) anchorY=cal.clientHeight/2;
-  const centerMin=Math.max(0,(cal.scrollTop + anchorY - headH))/old*60;
-  renderTimeGrid(cal, true);
-  cal.scrollTop=Math.max(0, centerMin/60*TG_HOUR - anchorY + headH);
+  if(anchorY==null) anchorY=days.clientHeight/2;
+  const centerMin=Math.max(0,(days.scrollTop + anchorY))/old*60;
+  cal.style.setProperty('--tg-hour', TG_HOUR+'px');
+  days.scrollTop=Math.max(0, centerMin/60*TG_HOUR - anchorY);
+  tgSyncPanes();
+  clearTimeout(TG_REFINE);
+  TG_REFINE=setTimeout(()=>{
+    const d0=cal.querySelector('.tg-days'); if(!d0) return;
+    renderTimeGrid(cal, true);   // keep機構がスクロール位置を引き継ぐ
+    tgSyncPanes();
+  },160);
 }
 function tgZoom(f){ tgSetHour(TG_HOUR*f, null); }
 
 // ===== タイム表示のズームジェスチャ：ピンチ（スマホ）／ Ctrl・⌘+ホイール（PC） =====
-// ピンチ中はアンカー時刻（2本指の中点に見えている時刻）を固定したままrAFで再描画する。
+// tgSetHourは非破壊（CSS変数のみ更新）なので、ピンチ中に対象要素が消えず連続ズームが安定して効く。
 function initTgZoomGestures(){
   const cal=document.getElementById('calendar-body');
   if(!cal) return;
-  let pinch=null;  // {d0,tg0,anchorY,centerMin}
+  let pinch=null;  // {d0,tg0}
   const dist=t=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
   cal.addEventListener('touchstart',e=>{
     if(CAL_MODE!=='time'||e.touches.length!==2) return;
-    const y=(e.touches[0].clientY+e.touches[1].clientY)/2 - cal.getBoundingClientRect().top;
-    pinch={d0:dist(e.touches), tg0:TG_HOUR, anchorY:y,
-           centerMin:Math.max(0,(cal.scrollTop + y - 30))/TG_HOUR*60};
+    pinch={d0:dist(e.touches), tg0:TG_HOUR};
     e.preventDefault();
   },{passive:false});
-  let raf=0;
   cal.addEventListener('touchmove',e=>{
     if(!pinch||e.touches.length!==2) return;
     e.preventDefault();
-    const want=Math.round(Math.min(TG_HOUR_MAX, Math.max(TG_HOUR_MIN, pinch.tg0*dist(e.touches)/pinch.d0)));
-    if(want===TG_HOUR||raf) return;
-    raf=requestAnimationFrame(()=>{ raf=0;
-      TG_HOUR=want; renderTimeGrid(cal, true);
-      cal.scrollTop=Math.max(0, pinch.centerMin/60*TG_HOUR - pinch.anchorY + 30);
-    });
+    const days=cal.querySelector('.tg-days'); if(!days) return;
+    const y=(e.touches[0].clientY+e.touches[1].clientY)/2 - days.getBoundingClientRect().top;
+    tgSetHour(pinch.tg0*dist(e.touches)/pinch.d0, y);
   },{passive:false});
   const endPinch=()=>{ pinch=null; };
   cal.addEventListener('touchend',endPinch);
@@ -2196,10 +2230,35 @@ function initTgZoomGestures(){
   cal.addEventListener('wheel',e=>{
     if(CAL_MODE!=='time'||!(e.ctrlKey||e.metaKey)) return;
     e.preventDefault();
-    const y=e.clientY - cal.getBoundingClientRect().top;
+    const days=cal.querySelector('.tg-days');
+    const y=days ? (e.clientY - days.getBoundingClientRect().top) : null;
     tgSetHour(TG_HOUR*(e.deltaY<0?1.1:1/1.1), y);
   },{passive:false});
 }
+
+// ===== レイアウト診断（📋ログ/⬇txt保存に含める。表示不具合の切り分け用） =====
+const LAYOUT_DIAG=[];
+function logLayoutDiag(tag){
+  try{
+    const r=el2=>{ if(!el2) return '-'; const b=el2.getBoundingClientRect(); return `L${Math.round(b.left)}/W${Math.round(b.width)}`; };
+    const panel=document.getElementById('panel');
+    const vv=window.visualViewport;
+    const days=document.querySelector('.tg-days');
+    let saved='-'; try{ saved=localStorage.getItem('rtm_panelW')||'-'; }catch(e){}
+    const line=`[layout:${tag}] win ${window.innerWidth}x${window.innerHeight}`
+      +` | vv ${vv?`${Math.round(vv.width)}x${Math.round(vv.height)} scale${(vv.scale||1).toFixed(2)} off(${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)})`:'-'}`
+      +` | portrait=${window.matchMedia('(orientation:portrait)').matches} sheet=${typeof isPortraitPhone==='function'?isPortraitPhone():'?'}`
+      +` | panel ${r(panel)} inlineW=${panel?(panel.style.width||'-'):'-'} saved=${saved}`
+      +` | docScrollX=${document.scrollingElement?document.scrollingElement.scrollLeft:0}`
+      +` | axis ${r(document.querySelector('.tg-axis'))} calHead ${r(document.getElementById('cal-head'))}`
+      +(days?` | days sl${Math.round(days.scrollLeft)} st${Math.round(days.scrollTop)} ${Math.round(days.clientWidth)}x${Math.round(days.clientHeight)}`:'');
+    LAYOUT_DIAG.push(line);
+    if(LAYOUT_DIAG.length>30) LAYOUT_DIAG.shift();
+    console.log(line);
+  }catch(e){}
+}
+window.addEventListener('resize',()=>{ clearTimeout(window.__ldT); window.__ldT=setTimeout(()=>logLayoutDiag('resize'),300); });
+window.addEventListener('orientationchange',()=>setTimeout(()=>logLayoutDiag('rotate'),400));
 
 function renderListView(cal){
   cal.innerHTML='';
@@ -2428,6 +2487,8 @@ function downloadLog(){
   const nPart=keys.filter(k=>LOG[k].result==='osm'&&LOG[k].partial).length;
   const nAtoB=keys.filter(k=>LOG[k].aToB).length;
   const lines=[`合計${keys.length}区間 / API成功(OSM描画)${nOk}（高速パス ${nF} / 戦略A ${nA} / 戦略B ${nB} / うち部分描画🔶 ${nPart}） ・ fallback採用${nFb} ・ エラー${nErr} ・ skip(直線)${nSkip} ・ 戦略A不達→B試行 ${nAtoB}`, totalTimeStr(), cacheStats()];
+  logLayoutDiag('export');
+  lines.push('', '━━ レイアウト診断（表示不具合の切り分け用） ━━', ...LAYOUT_DIAG, '');
   for(const seg of SEGS){
     const lg=LOG[`${seg.di}-${seg.si}`];
     if(!lg) continue;
