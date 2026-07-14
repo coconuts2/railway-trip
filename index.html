@@ -18,7 +18,7 @@ html,body{overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjus
 .hbtn{background:#f0f0f0;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:10px;color:#555;white-space:nowrap;}
 .hbtn:hover{background:#e3e3e3;}
 #main{display:flex;flex:1;min-height:0;position:relative;}
-#map{flex:1;min-width:0;background:#eef0f2;}
+#map{flex:1;min-width:0;background:#eef0f2;position:relative;z-index:0;} /* 全モードでスタッキング文脈化: Leaflet内部レイヤ(z-index200-700)が横画面で#panelの上に描画されるのを防ぐ（0617-3の縦画面限定修正を全体化） */
 #panel{width:280px;min-width:280px;background:#fff;border-left:1px solid #e0e0e0;overflow:hidden;display:flex;flex-direction:column;font-size:12px;position:relative;}
 #dot-jump{padding:10px 14px;border-bottom:1px solid #eee;background:#fffdfc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
 #dot-jump.empty{display:none;}
@@ -310,6 +310,9 @@ body.col-resizing{user-select:none;cursor:col-resize;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0712-6  ★0712-6: (1)#mapを全モードでposition:relative+z-index:0（Leaflet内部レイヤが横画面で#panelの上に
+//   描画される問題を修正。0617-3の縦画面限定対策を全体化） (2)回転/リサイズ後にmap.invalidateSizeを250ms/700msの2段撃ち
+//   （trackResize取りこぼしでタイルが回転前サイズのままになる問題を修正） (3)レイアウト診断に#main/#map実寸・Leaflet内部サイズ・positionを追加
 // rail_trip_map 0712-5  ★0712-5: (1)タイムグリッドをフリーズペイン化（sticky全廃: 日付ヘッダ横/時間軸縦をJS同期）→0712-4で日付ヘッダが消える退行を修正
 //   (2)viewportメタでページのピンチズーム禁止（拡大状態の持ち越しによるUI全体の左欠け=時間軸・見出しの見切れを根絶）
 //   (3)ズームを非破壊化（CSS変数--tg-hour/--tg-a/--tg-dのみ更新。ピンチ中の再描画でタッチが途切れるバグを解消、160ms後にtinyのみ確定）
@@ -2240,16 +2243,20 @@ function initTgZoomGestures(){
 const LAYOUT_DIAG=[];
 function logLayoutDiag(tag){
   try{
-    const r=el2=>{ if(!el2) return '-'; const b=el2.getBoundingClientRect(); return `L${Math.round(b.left)}/W${Math.round(b.width)}`; };
+    const r=el2=>{ if(!el2) return '-'; const b=el2.getBoundingClientRect(); return `L${Math.round(b.left)}/W${Math.round(b.width)}/H${Math.round(b.height)}`; };
     const panel=document.getElementById('panel');
     const vv=window.visualViewport;
     const days=document.querySelector('.tg-days');
     let saved='-'; try{ saved=localStorage.getItem('rtm_panelW')||'-'; }catch(e){}
-    const line=`[layout:${tag}] win ${window.innerWidth}x${window.innerHeight}`
+    const mapEl=document.getElementById('map');
+    let mapSz='-'; try{ if(typeof map!=='undefined'&&map&&map.getSize){const z=map.getSize(); mapSz=`${Math.round(z.x)}x${Math.round(z.y)}`;} }catch(e){}
+    let mapPos='-'; try{ mapPos=getComputedStyle(mapEl).position; }catch(e){}
+    const line=`[layout:${tag}] v0712-6 | win ${window.innerWidth}x${window.innerHeight}`
       +` | vv ${vv?`${Math.round(vv.width)}x${Math.round(vv.height)} scale${(vv.scale||1).toFixed(2)} off(${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)})`:'-'}`
       +` | portrait=${window.matchMedia('(orientation:portrait)').matches} sheet=${typeof isPortraitPhone==='function'?isPortraitPhone():'?'}`
       +` | panel ${r(panel)} inlineW=${panel?(panel.style.width||'-'):'-'} saved=${saved}`
       +` | docScrollX=${document.scrollingElement?document.scrollingElement.scrollLeft:0}`
+      +` | main ${r(document.getElementById('main'))} map ${r(mapEl)} pos:${mapPos} leafletSz=${mapSz}`
       +` | axis ${r(document.querySelector('.tg-axis'))} calHead ${r(document.getElementById('cal-head'))}`
       +(days?` | days sl${Math.round(days.scrollLeft)} st${Math.round(days.scrollTop)} ${Math.round(days.clientWidth)}x${Math.round(days.clientHeight)}`:'');
     LAYOUT_DIAG.push(line);
@@ -2259,6 +2266,19 @@ function logLayoutDiag(tag){
 }
 window.addEventListener('resize',()=>{ clearTimeout(window.__ldT); window.__ldT=setTimeout(()=>logLayoutDiag('resize'),300); });
 window.addEventListener('orientationchange',()=>setTimeout(()=>logLayoutDiag('rotate'),400));
+// 回転・リサイズ後にLeafletへコンテナ実寸を再認識させる（標準trackResizeがSamsung/Braveの回転で
+// 取りこぼすことがあるため、レイアウト確定後に2段撃ちで確実化）
+function afterViewportSettle(){
+  try{ if(typeof map!=='undefined' && map && map.invalidateSize) map.invalidateSize({pan:false}); }catch(e){}
+  try{ applySheet(); }catch(e){}
+}
+function scheduleViewportSettle(){
+  clearTimeout(window.__vs1); clearTimeout(window.__vs2);
+  window.__vs1=setTimeout(afterViewportSettle,250);
+  window.__vs2=setTimeout(afterViewportSettle,700);
+}
+window.addEventListener('resize',scheduleViewportSettle);
+window.addEventListener('orientationchange',scheduleViewportSettle);
 
 function renderListView(cal){
   cal.innerHTML='';
