@@ -8,7 +8,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
-html,body{overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%;} /* pull-to-refresh抑止＋横向き時のフォント自動拡大を無効化（時間軸の時刻見切れ防止） */
+html,body{overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%;overflow-x:hidden;} /* pull-to-refresh抑止＋横向き時のフォント自動拡大を無効化（時間軸の時刻見切れ防止） */
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
 #header{padding:7px 14px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
 #header h1{font-size:13px;font-weight:600;color:#222;}
@@ -145,9 +145,10 @@ body.col-resizing{user-select:none;cursor:col-resize;}
 #tg-zoom{display:none;flex-shrink:0;}
 #tg-zoom .vt{min-width:30px;padding:3px 9px;font-size:12px;font-weight:700;}
 /* ===== タイム表示（Googleカレンダー風 0:00-24:00 縦グリッド。1時間=var(--tg-hour)（JSのTG_HOURが設定・ズーム可変）、日ヘッダ=30px ===== */
-#calendar-body.time-mode{padding:0;background:#fff;}
-.tg-scroll{display:flex;min-width:max-content;}
-.tg-axis{position:sticky;left:0;z-index:5;width:40px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;}
+#calendar-body.time-mode{padding:0;background:#fff;overflow-x:hidden;} /* 縦スクロール専用（横は.tg-days側） */
+.tg-vwrap{display:flex;align-items:stretch;} /* [時間軸(固定)][日カラム(横スクロール)] の2ペイン。軸は構造上横に流れない */
+.tg-days{flex:1;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;}
+.tg-axis{width:40px;flex-shrink:0;background:#fff;border-right:1px solid #e2e2ea;}
 .tg-corner{position:sticky;top:0;z-index:6;height:30px;background:#fff;border-bottom:1px solid #dfe0e8;}
 .tg-hour{height:var(--tg-hour,44px);font-size:9px;color:#98a;text-align:right;padding-right:5px;transform:translateY(-6px);}
 .tg-day{width:150px;flex-shrink:0;border-right:1px solid #ececf2;}
@@ -304,6 +305,8 @@ body.col-resizing{user-select:none;cursor:col-resize;}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script>
 // =====================================================================
+// rail_trip_map 0712-4  ★0712-4: 横向きで時間軸が消える問題を構造的に解決。タイムグリッドを2ペイン化（時間軸=固定列、日カラムのみ.tg-daysで横スクロール）し
+//   sticky-left依存を廃止。html/bodyにoverflow-x:hidden、モード切替時にpanel/documentのscrollLeftをリセット（見出し・軸の左欠けの根絶）。
 // rail_trip_map 0712-3  ★0712-3: (1)横向きの時刻見切れ修正: text-size-adjust:100%でフォント自動拡大を無効化＋時間軸36→40px＋横画面パネル幅min(330px,46vw)＋横画面でもリサイザ使用可(タッチは当たり判定16px・可視グリップ追加)
 //   (2)ズーム操作性: 縦画面シートのドラッグ面から操作要素(button/input/label)を除外しタップのclick消失を修正。ピンチ(スマホ)とCtrl/⌘+ホイール(PC)のズームを追加(アンカー時刻固定・tgSetHour共通化)。±ボタン拡大。
 // rail_trip_map 0712-2  ★0712-2: (1)PC/タブレットでパネル幅をドラッグリサイズ可能に（#panel-resizer・localStorage保存・地図はinvalidateSizeで追従・縦画面では自動解除）
@@ -2048,6 +2051,8 @@ function setCalMode(m){
   if(bt) bt.classList.toggle('on', m==='time');
   const z=document.getElementById('tg-zoom');
   if(z) z.style.display = (m==='time') ? 'flex' : 'none';
+  const p=document.getElementById('panel'); if(p) p.scrollLeft=0;               // 迷子の水平ずれを回復
+  if(document.scrollingElement) document.scrollingElement.scrollLeft=0;
   renderCalendarView();
 }
 function renderCalendarView(){
@@ -2066,11 +2071,12 @@ function renderTimeGrid(cal, noAutoScroll){
   const pMin=s=>{ const m=/^(\d{1,2}):(\d{2})$/.exec((s||'').trim()); return m?(+m[1])*60+(+m[2]):null; };
   cal.innerHTML='';
   const el=(t,c)=>{ const e=document.createElement(t); if(c) e.className=c; return e; };
-  const wrap=el('div','tg-scroll');
+  const wrap=el('div','tg-vwrap');
   const ax=el('div','tg-axis');
   ax.appendChild(el('div','tg-corner'));
   for(let h=0;h<24;h++){ const hv=el('div','tg-hour'); hv.textContent=h+':00'; ax.appendChild(hv); }
   wrap.appendChild(ax);
+  const daysWrap=el('div','tg-days');   // 日カラムの横スクロール領域（時間軸は外側で固定）
   const byDay=new Map();
   for(const s of SEGS){ (byDay.get(s.di)||byDay.set(s.di,[]).get(s.di)).push(s); }
   const days=[...byDay.keys()].sort((a,b)=>a-b);
@@ -2132,9 +2138,11 @@ function renderTimeGrid(cal, noAutoScroll){
       col.appendChild(block);
     }
     day.appendChild(col);
-    wrap.appendChild(day);
+    daysWrap.appendChild(day);
   });
+  wrap.appendChild(daysWrap);
   cal.appendChild(wrap);
+  cal.scrollLeft=0;  // 念のため（time-modeは横スクロールしない）
   if(!noAutoScroll){
     // 最初の行程の少し上へ自動スクロール（ズーム時は呼び元が中央時刻を維持するためスキップ）
     cal.scrollTop=Math.max(0, ((firstMin===24*60?8*60:firstMin)/60)*HOUR-36);
